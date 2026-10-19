@@ -12,7 +12,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
@@ -29,6 +33,7 @@ import kotlin.math.pow
 import kotlin.math.roundToInt
 
 private val MagentaBright = Color(0xFFFF00FF)
+private val StochYellow = Color(0xFFFACC15)
 private const val BAR_ALPHA = 0.40f
 private const val BAR_ALPHA_MAGENTA = 0.75f
 
@@ -51,6 +56,8 @@ private fun fmtScale(v: Double): String = if (v >= 10.0) "%.0f".format(v) else i
 /**
  * v4.0: 5-minute transit vs natal RESONANCE bars. Green bar up = weighted bullish resonance,
  * red bar down = weighted bearish resonance (magenta part = hard Pluto), white tick = net.
+ * v4.1: the yellow line is the slow stochastic of the net (0 to 100 mapped onto the full chart height,
+ * 50 on the zero line, dashed lines at 80 and 20).
  * The vertical scale is automatic: the largest bar in the whole series sets it (labels sit in the left gap).
  * zoom = 1 shows every bar; higher values show fewer bars, wider, around the selected bar.
  * Pinch with two fingers, or use the zoom buttons, to change zoom (onZoomBy gets a multiplier).
@@ -60,6 +67,7 @@ fun SentimentChart(
     series: List<SentimentBar>,
     inspectedTimeMs: Long,
     onInspectTime: (Long) -> Unit,
+    stoch: DoubleArray? = null,
     zoom: Float = 1f,
     onZoomBy: (Float) -> Unit = {},
     modifier: Modifier = Modifier.fillMaxWidth().height(260.dp)
@@ -236,6 +244,39 @@ fun SentimentChart(
             }
         }
 
+        // Slow stochastic of the net: yellow line, 0..100 mapped to -max..+max
+        if (stoch != null && stoch.size == numBars) {
+            fun stochY(k: Double): Float = getY((k / 50.0 - 1.0) * maxVal)
+
+            // overbought / oversold guides at 80 and 20
+            listOf(80.0, 20.0).forEach { lvl ->
+                drawLine(
+                    color = StochYellow.copy(alpha = 0.25f),
+                    start = Offset(leftMargin, stochY(lvl)),
+                    end = Offset(leftMargin + plotWidth, stochY(lvl)),
+                    strokeWidth = 1f,
+                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 8f), 0f)
+                )
+            }
+
+            val path = Path()
+            for (i in firstVisible until firstVisible + count) {
+                val x = leftMargin + (i - firstVisible + 0.5f) * barWidth
+                val y = stochY(stoch[i])
+                if (i == firstVisible) path.moveTo(x, y) else path.lineTo(x, y)
+            }
+            drawPath(
+                path = path,
+                color = Color.Black.copy(alpha = 0.55f),
+                style = Stroke(width = 4.5f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+            )
+            drawPath(
+                path = path,
+                color = StochYellow,
+                style = Stroke(width = 2.5f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+            )
+        }
+
         // Current real-time "Now" vertical dashed line
         val now = System.currentTimeMillis()
         val nowIdx = (now - firstT) / 300_000.0
@@ -269,6 +310,13 @@ fun SentimentChart(
                 radius = 2.5.dp.toPx(),
                 center = Offset(selX, selY)
             )
+        }
+
+        // Stochastic node on the selected bar
+        if (stoch != null && stoch.size == numBars) {
+            val sy = getY((stoch[selIdx] / 50.0 - 1.0) * maxVal)
+            drawCircle(color = Color.White, radius = 3.5.dp.toPx(), center = Offset(selX, sy))
+            drawCircle(color = StochYellow, radius = 2.2.dp.toPx(), center = Offset(selX, sy))
         }
 
         // Vertical autoscale labels in the left gap

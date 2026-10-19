@@ -530,6 +530,44 @@ object AstroEngine {
         return hits
     }
 
+    // v4.1: slow stochastic settings (classic 14 / 3)
+    private const val STOCH_LOOKBACK = 14
+    private const val STOCH_SMOOTH = 3
+
+    /**
+     * v4.1: slow stochastic oscillator of the net resonance (0 to 100, 50 = middle of the recent range).
+     * Raw %K = position of the net inside its last 14-bar high/low range; slow %K = 3-bar average of raw %K.
+     * The range is never allowed to shrink below 10% of the biggest bar in the series, so tiny wobbles on a
+     * flat stretch stay near 50 instead of being stretched to the full 0 to 100.
+     */
+    fun stochasticOfNet(
+        series: List<SentimentBar>,
+        lookback: Int = STOCH_LOOKBACK,
+        smooth: Int = STOCH_SMOOTH
+    ): DoubleArray {
+        val n = series.size
+        if (n == 0) return DoubleArray(0)
+        val minRange = 0.1 * max(1.0, series.maxOf { max(it.resBull, it.resBear) })
+        val raw = DoubleArray(n)
+        for (i in 0 until n) {
+            var hi = -Double.MAX_VALUE
+            var lo = Double.MAX_VALUE
+            for (k in max(0, i - lookback + 1)..i) {
+                val v = series[k].resNet
+                if (v > hi) hi = v
+                if (v < lo) lo = v
+            }
+            val rng = max(hi - lo, minRange)
+            raw[i] = 50.0 + 100.0 * (series[i].resNet - (hi + lo) / 2.0) / rng
+        }
+        return DoubleArray(n) { i ->
+            val from = max(0, i - smooth + 1)
+            var sum = 0.0
+            for (k in from..i) sum += raw[k]
+            sum / (i - from + 1)
+        }
+    }
+
     /** Smarket = Sum(Sp x Wp x Cj) / Sum(Wp), with Wp the dynamic weight. */
     fun calculateScore(aspects: List<AspectInfo>): Double {
         if (aspects.isEmpty()) return 0.0

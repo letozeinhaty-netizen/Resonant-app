@@ -132,6 +132,9 @@ fun MainScreen(
         )
     }
 
+    // v4.1: slow stochastic of the net resonance (yellow line)
+    val stoch = remember(series) { AstroEngine.stochasticOfNet(series) }
+
     // Exact hits in window
     val exactHits = remember(series, taintAllMm) {
         AstroEngine.calculateExactHits(series, 3.0, taintAllMm)
@@ -406,12 +409,17 @@ fun MainScreen(
                     }
                 }
                 Text(
-                    text = "Green up: bullish  |  red down: bearish  |  white tick: net  |  magenta: hard Pluto  |  auto scale  |  pinch or +/- to zoom",
+                    text = "Green up: bullish  |  red down: bearish  |  white tick: net  |  yellow: stochastic  |  magenta: hard Pluto  |  auto scale  |  pinch or +/- to zoom",
                     fontSize = 10.sp,
                     color = Slate400,
                     modifier = Modifier.padding(top = 2.dp)
                 )
                 if (currentBar != null) {
+                    val stochNow = stoch.getOrNull(((currentBar.timeMs - series.first().timeMs) / 300_000L).toInt())
+                    Row(
+                        modifier = Modifier.padding(top = 2.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
                     Text(
                         text = "Bull +%.2f   Bear −%.2f   Net %s".format(
                             currentBar.resBull,
@@ -421,9 +429,18 @@ fun MainScreen(
                         fontSize = 11.sp,
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
-                        color = if (currentBar.resNet > 0) Emerald400 else if (currentBar.resNet < 0) Rose400 else Slate400,
-                        modifier = Modifier.padding(top = 2.dp)
+                        color = if (currentBar.resNet > 0) Emerald400 else if (currentBar.resNet < 0) Rose400 else Slate400
                     )
+                    if (stochNow != null) {
+                        Text(
+                            text = "Stoch %.0f".format(stochNow),
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFFFACC15)
+                        )
+                    }
+                    }
                 }
                 Spacer(modifier = Modifier.height(8.dp))
 
@@ -436,6 +453,7 @@ fun MainScreen(
                     SentimentChart(
                         series = series,
                         inspectedTimeMs = currentBar?.timeMs ?: inspectedTimeMs,
+                        stoch = stoch,
                         zoom = zoom,
                         onZoomBy = { f -> zoom = (zoom * f).coerceIn(1f, 12f) },
                         onInspectTime = { t ->
