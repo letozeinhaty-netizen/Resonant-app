@@ -533,3 +533,111 @@ fun ExactHitsCard(
         }
     }
 }
+
+/**
+ * v4.2: Resonance breakdown for the selected bar, in a quiet background style.
+ * Lists every transit-to-natal hit that makes up the bull and bear bars, biggest first.
+ */
+@Composable
+fun ResonanceBreakdownCard(currentBar: SentimentBar?) {
+    if (currentBar == null) return
+
+    val hits = currentBar.resHits.sortedByDescending { abs(it.value) }
+    val maxAbs = hits.maxOfOrNull { abs(it.value) } ?: 1.0
+    val shown = hits.take(12)
+    val pulseViolet = Color(0xFFA78BFA)
+
+    fun signed(v: Double): String = (if (v > 0) "+" else "") + "%.2f".format(v)
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = BgDark),
+        shape = RoundedCornerShape(12.dp),
+        border = CardDefaults.outlinedCardBorder().copy(
+            brush = androidx.compose.ui.graphics.SolidColor(BorderDark.copy(alpha = 0.6f))
+        )
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text(
+                text = "RESONANCE BREAKDOWN (${hits.size})",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                color = Slate400
+            )
+            Text(
+                text = "Bull +%.2f  Bear −%.2f  |  Base %s  Pulse %s".format(
+                    currentBar.resBull,
+                    currentBar.resBear,
+                    signed(currentBar.resBase),
+                    signed(currentBar.resPulse)
+                ),
+                fontSize = 10.sp,
+                fontFamily = FontFamily.Monospace,
+                color = Slate400,
+                modifier = Modifier.padding(top = 2.dp, bottom = 4.dp)
+            )
+
+            if (hits.isEmpty()) {
+                Text(
+                    text = "No transit-natal aspect within orb on this bar",
+                    fontSize = 11.sp,
+                    color = Slate400,
+                    modifier = Modifier.padding(vertical = 6.dp)
+                )
+            } else {
+                shown.forEach { h ->
+                    val v = h.value
+                    val col = if (v > 0) Emerald400 else Rose400
+                    val tags = buildList {
+                        if (h.ascTrigger) add("ASC")
+                        if (h.mcTrigger) add("MC")
+                        if (h.pairMult > 1.0) add("PAIR")
+                    }
+                    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "${h.transitGlyph} ${h.transitName} ${h.aspectAngle}° natal ${h.natalGlyph} ${h.natalName}",
+                                fontSize = 11.sp,
+                                color = Slate100.copy(alpha = 0.85f),
+                                modifier = Modifier.weight(1f)
+                            )
+                            Text(
+                                text = signed(v),
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold,
+                                color = col
+                            )
+                        }
+                        Text(
+                            text = "orb %.1f°  Wp %.2f  Cj %.3f  ×%.2f".format(
+                                h.orbDiff, h.dynWeight, h.coeff, h.orbFactor * h.boost
+                            ) + if (tags.isEmpty()) "" else "   " + tags.joinToString(" "),
+                            fontSize = 9.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = if (tags.isEmpty()) Slate400 else pulseViolet.copy(alpha = 0.9f)
+                        )
+                        Box(
+                            modifier = Modifier
+                                .padding(top = 2.dp)
+                                .fillMaxWidth((abs(v) / maxAbs).toFloat().coerceIn(0.02f, 1f))
+                                .height(3.dp)
+                                .background(col.copy(alpha = 0.5f), RoundedCornerShape(2.dp))
+                        )
+                    }
+                }
+                if (hits.size > shown.size) {
+                    Text(
+                        text = "+ ${hits.size - shown.size} smaller hits",
+                        fontSize = 10.sp,
+                        color = Slate400,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+            }
+        }
+    }
+}

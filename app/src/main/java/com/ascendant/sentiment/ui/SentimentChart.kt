@@ -34,6 +34,8 @@ import kotlin.math.roundToInt
 
 private val MagentaBright = Color(0xFFFF00FF)
 private val StochYellow = Color(0xFFFACC15)
+private val BaseSky = Color(0xFF38BDF8)
+private val PulseViolet = Color(0xFFA78BFA)
 private const val BAR_ALPHA = 0.40f
 private const val BAR_ALPHA_MAGENTA = 0.75f
 
@@ -68,6 +70,7 @@ fun SentimentChart(
     inspectedTimeMs: Long,
     onInspectTime: (Long) -> Unit,
     stoch: DoubleArray? = null,
+    view: IntArray = remember(series) { intArrayOf(0, series.size, 1000) },
     zoom: Float = 1f,
     onZoomBy: (Float) -> Unit = {},
     modifier: Modifier = Modifier.fillMaxWidth().height(260.dp)
@@ -84,7 +87,6 @@ fun SentimentChart(
     val selIdx = ((inspectedTimeMs - firstT) / 300_000.0).toInt().coerceIn(0, numBars - 1)
 
     // view[0] = first visible bar, view[1] = visible bar count, view[2] = zoom the view was last centred for
-    val view = remember(series) { intArrayOf(0, numBars, 1000) }
     val zoomKey = (zoom * 1000f).roundToInt()
     var start = view[0]
     if (zoomKey != view[2]) start = selIdx - count / 2            // zoom changed: centre on the cursor
@@ -244,6 +246,31 @@ fun SentimentChart(
             }
         }
 
+        // v4.2: base field (no trigger boost) as a sky line; the Asc / MC pulse is the violet stem from base up or down to the net tick
+        run {
+            val basePath = Path()
+            val stemW = max(1.5f, minOf(barWidth * 0.35f, 2.5.dp.toPx()))
+            for (i in firstVisible until firstVisible + count) {
+                val bar = series[i]
+                val x = leftMargin + (i - firstVisible + 0.5f) * barWidth
+                val yBase = getY(bar.resBase)
+                if (i == firstVisible) basePath.moveTo(x, yBase) else basePath.lineTo(x, yBase)
+                if (abs(bar.resNet - bar.resBase) > 1e-9) {
+                    drawLine(
+                        color = PulseViolet,
+                        start = Offset(x, yBase),
+                        end = Offset(x, getY(bar.resNet)),
+                        strokeWidth = stemW
+                    )
+                }
+            }
+            drawPath(
+                path = basePath,
+                color = BaseSky,
+                style = Stroke(width = 1.8f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+            )
+        }
+
         // Slow stochastic of the net: yellow line, 0..100 mapped to -max..+max
         if (stoch != null && stoch.size == numBars) {
             fun stochY(k: Double): Float = getY((k / 50.0 - 1.0) * maxVal)
@@ -338,6 +365,100 @@ fun SentimentChart(
         scaleLabel("+" + fmtScale(maxVal / 2), maxVal / 2, Slate400)
         scaleLabel("0", 0.0, Slate400)
         scaleLabel("−" + fmtScale(maxVal / 2), -maxVal / 2, Slate400)
+        scaleLabel("−" + fmtScale(maxVal), -maxVal, Rose400.copy(alpha = 0.8f))
+    }
+}
+
+/**
+ * v4.2: detrended net (net minus its 1-hour average) as a histogram, lined up under the main chart.
+ * It reads the visible window written by the main chart (view), so zoom and scrolling stay in step.
+ */
+@Composable
+fun DetrendedPane(
+    series: List<SentimentBar>,
+    detr: DoubleArray,
+    inspectedTimeMs: Long,
+    view: IntArray,
+    zoom: Float,
+    modifier: Modifier = Modifier.fillMaxWidth().height(96.dp)
+) {
+    if (series.isEmpty() || detr.size != series.size) return
+
+    val numBars = series.size
+    val firstT = series.first().timeMs
+    val selIdx = ((inspectedTimeMs - firstT) / 300_000.0).toInt().coerceIn(0, numBars - 1)
+    // the main chart is composed first, so the window in view is already up to date here
+    val start = view[0].coerceIn(0, numBars - 1)
+    val count = view[1].coerceIn(1, numBars - start)
+    // autoscale on the biggest detrended swing in the series (minimum 0.5 unit)
+    val maxVal = remember(detr) { niceCeil(max(0.5, detr.maxOf { abs(it) } * 1.05)) }
+    val zoomKey = zoom   // reading zoom keeps this pane recomposing when the chart zoom changes
+
+    Canvas(modifier = modifier) {
+        val leftMargin = 42.dp.toPx()
+        val topMargin = 6.dp.toPx()
+        val bottomMargin = 6.dp.toPx()
+        val plotWidth = size.width - leftMargin - 12.dp.toPx()
+        val plotHeight = size.height - topMargin - bottomMargin
+        fun getY(v: Double): Float = (topMargin + (plotHeight / 2.0) * (1.0 - v / maxVal)).toFloat()
+
+        drawRect(color = BgDark, size = size)
+        val yZero = getY(0.0)
+
+        // faint +-max guides and the zero line
+        listOf(1.0, -1.0).forEach { f ->
+            drawLine(
+                color = Color(0xFF475569).copy(alpha = 0.35f),
+                start = Offset(leftMargin, getY(f * maxVal)),
+                end = Offset(leftMargin + plotWidth, getY(f * maxVal)),
+                strokeWidth = 1f
+            )
+        }
+        drawLine(
+            color = Color(0xFF475569),
+            start = Offset(leftMargin - 4.dp.toPx(), yZero),
+            end = Offset(leftMargin + plotWidth, yZero),
+            strokeWidth = 1.5f
+        )
+
+        val barWidth = plotWidth / count
+        for (i in start until start + count) {
+            val v = detr[i]
+            if (v == 0.0) continue
+            val y = getY(v)
+            drawRect(
+                color = (if (v > 0) Emerald500 else Rose500).copy(alpha = 0.75f),
+                topLeft = Offset(leftMargin + (i - start) * barWidth, minOf(yZero, y)),
+                size = Size(maxOf(barWidth - 1f, 1.5f), maxOf(abs(y - yZero), 1f))
+            )
+        }
+
+        // Inspected bar cursor, same white line as the main chart
+        val selX = leftMargin + (selIdx - start + 0.5f) * barWidth
+        drawLine(
+            color = Color.White,
+            start = Offset(selX, topMargin),
+            end = Offset(selX, topMargin + plotHeight),
+            strokeWidth = 2f
+        )
+
+        // scale labels in the left gap
+        val labelPaint = android.graphics.Paint().apply {
+            isAntiAlias = true
+            textSize = 9.sp.toPx()
+            textAlign = android.graphics.Paint.Align.RIGHT
+        }
+        fun scaleLabel(text: String, v: Double, color: Color) {
+            labelPaint.color = color.toArgb()
+            drawContext.canvas.nativeCanvas.drawText(
+                text,
+                leftMargin - 7.dp.toPx(),
+                getY(v) + labelPaint.textSize * 0.35f,
+                labelPaint
+            )
+        }
+        scaleLabel("+" + fmtScale(maxVal), maxVal, Emerald400.copy(alpha = 0.8f))
+        scaleLabel("0", 0.0, Slate400)
         scaleLabel("−" + fmtScale(maxVal), -maxVal, Rose400.copy(alpha = 0.8f))
     }
 }

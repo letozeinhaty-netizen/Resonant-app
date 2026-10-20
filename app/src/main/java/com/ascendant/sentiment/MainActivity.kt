@@ -132,6 +132,10 @@ fun MainScreen(
         )
     }
 
+    // v4.2: visible window shared by the main chart and the detrended pane, and the detrended net (net minus 1-hour average)
+    val chartView = remember(series) { intArrayOf(0, series.size, 1000) }
+    val detr = remember(series) { AstroEngine.detrendedNet(series) }
+
     // v4.1: slow stochastic of the net resonance (yellow line)
     val stoch = remember(series) { AstroEngine.stochasticOfNet(series) }
 
@@ -409,7 +413,7 @@ fun MainScreen(
                     }
                 }
                 Text(
-                    text = "Green up: bullish  |  red down: bearish  |  white tick: net  |  yellow: stochastic  |  magenta: hard Pluto  |  auto scale  |  pinch or +/- to zoom",
+                    text = "Green up: bullish  |  red down: bearish  |  white tick: net  |  sky line: base  |  violet: Asc/MC pulse  |  yellow: stochastic  |  magenta: hard Pluto  |  auto scale  |  pinch or +/- to zoom",
                     fontSize = 10.sp,
                     color = Slate400,
                     modifier = Modifier.padding(top = 2.dp)
@@ -454,6 +458,7 @@ fun MainScreen(
                         series = series,
                         inspectedTimeMs = currentBar?.timeMs ?: inspectedTimeMs,
                         stoch = stoch,
+                        view = chartView,
                         zoom = zoom,
                         onZoomBy = { f -> zoom = (zoom * f).coerceIn(1f, 12f) },
                         onInspectTime = { t ->
@@ -470,6 +475,45 @@ fun MainScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(min = 260.dp)
+                    )
+                }
+
+                // v4.2: detrended net pane, lined up under the chart
+                Spacer(modifier = Modifier.height(8.dp))
+                val detrNow = currentBar?.let { detr.getOrNull(((it.timeMs - series.first().timeMs) / 300_000L).toInt()) }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "DETRENDED NET  (net − 1h average)",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Slate400
+                    )
+                    if (detrNow != null) {
+                        Text(
+                            text = (if (detrNow > 0) "+" else "") + "%.2f".format(detrNow),
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            color = if (detrNow > 0) Emerald400 else if (detrNow < 0) Rose400 else Slate400
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                ) {
+                    DetrendedPane(
+                        series = series,
+                        detr = detr,
+                        inspectedTimeMs = currentBar?.timeMs ?: inspectedTimeMs,
+                        view = chartView,
+                        zoom = zoom
                     )
                 }
 
@@ -534,6 +578,9 @@ fun MainScreen(
                 }
             }
         }
+
+        // v4.2: per-bar resonance breakdown (quiet panel directly below the chart)
+        ResonanceBreakdownCard(currentBar = currentBar)
 
         // v3.2: Active Midheaven Aspects (below the chart)
         if (showMc) {

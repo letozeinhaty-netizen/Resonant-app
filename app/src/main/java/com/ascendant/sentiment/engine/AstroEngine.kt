@@ -501,13 +501,10 @@ object AstroEngine {
                     val d = abs(s - A)
                     if (d <= orbLimit) {
                         val falloff = if (orbFalloff) 1.0 - d / orbLimit else 1.0
-                        var boost = if (pairBoost && i == j) PAIR_BOOST else 1.0
-                        if (trigger) {
-                            var t = 0
-                            if (tp.name in ascPlanets) t++
-                            if (np.name in mcPoints) t++
-                            boost *= 1.0 + TRIGGER_BOOST * t
-                        }
+                        val pairMult = if (pairBoost && i == j) PAIR_BOOST else 1.0
+                        val ascTrig = trigger && tp.name in ascPlanets
+                        val mcTrig = trigger && np.name in mcPoints
+                        val triggerMult = 1.0 + TRIGGER_BOOST * ((if (ascTrig) 1 else 0) + (if (mcTrig) 1 else 0))
                         hits.add(
                             ResonanceHit(
                                 transitName = tp.name,
@@ -520,7 +517,10 @@ object AstroEngine {
                                 coeff = cjFor(tp, A),
                                 dynWeight = dw[j],
                                 orbFactor = falloff,
-                                boost = boost
+                                pairMult = pairMult,
+                                triggerMult = triggerMult,
+                                ascTrigger = ascTrig,
+                                mcTrigger = mcTrig
                             )
                         )
                     }
@@ -568,6 +568,24 @@ object AstroEngine {
         }
     }
 
+    // v4.2: detrending window, 12 bars of 5 minutes = 1 hour
+    private const val DETREND_BARS = 12
+
+    /**
+     * v4.2: detrended net = net minus its trailing 1-hour average (the bar itself included).
+     * The slow plateaus cancel out and what is left oscillates around zero.
+     * The first 11 bars of the window use however many bars exist so far.
+     */
+    fun detrendedNet(series: List<SentimentBar>, window: Int = DETREND_BARS): DoubleArray {
+        val n = series.size
+        return DoubleArray(n) { i ->
+            val from = max(0, i - window + 1)
+            var sum = 0.0
+            for (k in from..i) sum += series[k].resNet
+            series[i].resNet - sum / (i - from + 1)
+        }
+    }
+
     /** Smarket = Sum(Sp x Wp x Cj) / Sum(Wp), with Wp the dynamic weight. */
     fun calculateScore(aspects: List<AspectInfo>): Double {
         if (aspects.isEmpty()) return 0.0
@@ -611,7 +629,8 @@ object AstroEngine {
             val bull = hits.filter { it.value > 0 }.sumOf { it.value }
             val bear = hits.filter { it.value < 0 }.sumOf { -it.value }
             val bearPluto = hits.filter { it.value < 0 && it.isHardPluto }.sumOf { -it.value }
-            list.add(SentimentBar(t, asc, longs, h, s, mc, mcAsp, calculateScore(mcAsp), bull, bear, bearPluto, hits))
+            val base = hits.sumOf { it.baseValue }
+            list.add(SentimentBar(t, asc, longs, h, s, mc, mcAsp, calculateScore(mcAsp), bull, bear, bearPluto, hits, base))
         }
         return list
     }

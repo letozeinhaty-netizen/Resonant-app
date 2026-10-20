@@ -43,10 +43,21 @@ data class ResonanceHit(
     val coeff: Double,
     val dynWeight: Double,
     val orbFactor: Double,   // 1 - orb/limit when orb falloff is on, otherwise 1
-    val boost: Double        // pair boost (same planet) x trigger boost (Ascendant / Midheaven activation)
+    val pairMult: Double = 1.0,      // 1.5 when the planet aspects its own natal position (pair boost on)
+    val triggerMult: Double = 1.0,   // 1 + 0.5 per active Ascendant / Midheaven trigger (trigger boost on)
+    val ascTrigger: Boolean = false, // the transiting planet is on the Active Ascendant list
+    val mcTrigger: Boolean = false   // the natal point is on the Active Midheaven list
 ) {
+    /** Total boost = pair boost x trigger boost. */
+    val boost: Double
+        get() = pairMult * triggerMult
+
     val value: Double
         get() = polarity * dynWeight * coeff * orbFactor * boost
+
+    /** v4.2: the same hit without the Asc / MC trigger boost (the slow base field). */
+    val baseValue: Double
+        get() = polarity * dynWeight * coeff * orbFactor * pairMult
 
     val isHardPluto: Boolean
         get() = transitName == "Pluto" && aspectAngle in PLUTO_HARD_ANGLES
@@ -67,8 +78,14 @@ data class SentimentBar(
     val resBull: Double = 0.0,
     val resBear: Double = 0.0,
     val resBearPluto: Double = 0.0,
-    val resHits: List<ResonanceHit> = emptyList()
+    val resHits: List<ResonanceHit> = emptyList(),
+    // v4.2: net of the base field (no trigger boost); resNet - resBase is the Asc / MC pulse
+    val resBase: Double = 0.0
 ) {
+    /** v4.2: the part of the net that comes from Asc / MC trigger boosts. */
+    val resPulse: Double
+        get() = resNet - resBase
+
     /** v4.0: net resonance = bullish minus bearish. */
     val resNet: Double
         get() = resBull - resBear
