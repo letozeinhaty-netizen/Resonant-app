@@ -104,6 +104,7 @@ fun MainScreen(
     var showMood by remember { mutableStateOf(true) }     // v5.0: Moon mood card
     var showVoc by remember { mutableStateOf(true) }      // v6.1: void-of-course Moon row
     var showStations by remember { mutableStateOf(true) } // v6.1: station row
+    var moonInNatal by remember { mutableStateOf(true) }  // v6.2: transiting Moon in the sky card's natal line
     var showSky by remember { mutableStateOf(true) }      // v6.1: sky field week card
     var skyTintOn by remember { mutableStateOf(true) }    // v6.1: sky tint on the detrended pane
 
@@ -154,10 +155,10 @@ fun MainScreen(
     val td = remember(series, taintAllMm) { AstroEngine.turningData(series, 3.0, taintAllMm) }
     // v6.1: sky field week card, 6-hour bars, recomputed when the local week changes or the switches change
     val weekBounds = remember(inspectedTimeMs / 86_400_000L, selectedTimezone) { AstroEngine.weekBoundsMs(inspectedTimeMs, selectedTimezone) }
-    val skyWeek = remember(weekBounds.first, showSky, useSd, usePm, taintAllMm, orbFalloff, pairBoost) {
+    val skyWeek = remember(weekBounds.first, showSky, moonInNatal, useSd, usePm, taintAllMm, orbFalloff, pairBoost) {
         if (showSky) AstroEngine.calculateSkyWeek(
             startMs = weekBounds.first, useSd = useSd, usePm = usePm, taintAllMm = taintAllMm,
-            orbFalloff = orbFalloff, pairBoost = pairBoost
+            orbFalloff = orbFalloff, pairBoost = pairBoost, moonInNatal = moonInNatal
         ) else null
     }
     val crossFlags = remember(series) { AstroEngine.zeroCrossFlags(series) } // v4.3
@@ -403,6 +404,7 @@ fun MainScreen(
                     ResonanceSwitch("Sky field week card", showSky, Modifier.weight(1f)) { onHaptic(); showSky = it }
                     ResonanceSwitch("Sky tint (detrended)", skyTintOn, Modifier.weight(1f)) { onHaptic(); skyTintOn = it }
                 }
+                ResonanceSwitch("Moon in sky card natal line", moonInNatal, Modifier.fillMaxWidth()) { onHaptic(); moonInNatal = it }
             }
         }
 

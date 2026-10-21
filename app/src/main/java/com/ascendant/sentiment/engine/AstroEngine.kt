@@ -970,7 +970,8 @@ object AstroEngine {
         usePm: Boolean = true,
         taintAllMm: Boolean = true,
         orbFalloff: Boolean = true,
-        pairBoost: Boolean = true
+        pairBoost: Boolean = true,
+        moonInNatal: Boolean = true   // false = leave the transiting Moon out of the transit-to-natal line
     ): SkyWeek {
         val hour = 3_600_000L
         val perBar = max(1, (barMs / hour).toInt())
@@ -987,7 +988,7 @@ object AstroEngine {
                 a += skyFieldValue(longs, orbLimit, taintAllMm)
                 b += calculateResonance(
                     longs, emptyList(), emptyList(), orbLimit, useSd, usePm, taintAllMm, orbFalloff, pairBoost, false
-                ).sumOf { it.value }
+                ).filter { moonInNatal || it.transitName != "Moon" }.sumOf { it.value }
             }
             tt[k] = a / perBar
             tn[k] = b / perBar
