@@ -101,6 +101,7 @@ fun MainScreen(
     var showShare by remember { mutableStateOf(true) }    // v4.3: bull share strip
     var showDetr by remember { mutableStateOf(true) }     // v4.2: detrended net pane
     var showMacd by remember { mutableStateOf(true) }     // v4.3: MACD pane
+    var showMood by remember { mutableStateOf(true) }     // v5.0: Moon mood card
 
     val locations = AstroEngine.PRESET_LOCATIONS
     val activeLocation = locations[selectedLocationIdx]
@@ -139,6 +140,11 @@ fun MainScreen(
     // v4.2: visible window shared by the main chart and the detrended pane, and the detrended net (net minus 1-hour average)
     val chartView = remember(series) { intArrayOf(0, series.size, 1000) }
     val detr = remember(series) { AstroEngine.detrendedNet(series) }
+    // v5.0: Moon mood for the local calendar day of the inspected time (recomputed only when the day changes)
+    val dayBounds = remember(inspectedTimeMs, selectedTimezone) { AstroEngine.dayBoundsMs(inspectedTimeMs, selectedTimezone) }
+    val moodPoints = remember(dayBounds.first, dayBounds.second, showMood) {
+        if (showMood) AstroEngine.calculateMoodSeries(dayBounds.first, dayBounds.second) else emptyList()
+    }
     val macd = remember(series) { AstroEngine.macdOfNet(series) }          // v4.3
     val crossFlags = remember(series) { AstroEngine.zeroCrossFlags(series) } // v4.3
 
@@ -373,6 +379,7 @@ fun MainScreen(
                     ResonanceSwitch("Detrended pane", showDetr, Modifier.weight(1f)) { onHaptic(); showDetr = it }
                     ResonanceSwitch("MACD pane", showMacd, Modifier.weight(1f)) { onHaptic(); showMacd = it }
                 }
+                ResonanceSwitch("Moon mood card (temperature of the day)", showMood, Modifier.fillMaxWidth()) { onHaptic(); showMood = it }
             }
         }
 
@@ -629,6 +636,21 @@ fun MainScreen(
                     }
                 }
             }
+        }
+
+        // v5.0: Moon mood, temperature of the day (below the chart card with its MACD pane and steppers)
+        if (showMood && moodPoints.isNotEmpty()) {
+            MoodCard(
+                points = moodPoints,
+                inspectedTimeMs = inspectedTimeMs,
+                nowMs = nowMs,
+                timeZoneId = selectedTimezone,
+                onInspectTime = { t ->
+                    isLive = false
+                    if (series.isNotEmpty() && (t < series.first().timeMs || t > series.last().timeMs)) centerTimeMs = t
+                    inspectedTimeMs = t
+                }
+            )
         }
 
         // v4.2: per-bar resonance breakdown (quiet panel directly below the chart)

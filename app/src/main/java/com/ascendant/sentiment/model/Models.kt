@@ -127,3 +127,30 @@ class MacdSeries(
     val signal: DoubleArray,
     val hist: DoubleArray
 )
+
+/**
+ * v5.0: one Moon aspect that feeds the mood.
+ * cls: 1 = hot (Mars, Sun, Jupiter), -1 = cold (Saturn, Pluto), 2 = electric (Uranus, Mercury), 0 = neutral (Venus, Moon, Neptune).
+ * strength = Wp x Cj x orbFactor of the aspecting planet.
+ */
+class MoodHit(
+    val planetName: String,
+    val glyph: String,
+    val fromNatal: Boolean,   // true = Moon aspects a birth chart point, false = Moon aspects a transiting planet
+    val aspectAngle: Int,
+    val orbDiff: Double,
+    val cls: Int,
+    val strength: Double
+)
+
+/** v5.0: the Moon's mood at one moment: temperature -100 (freezing) to +100 (scorching), electric 0 to 100. */
+class MoodPoint(
+    val timeMs: Long,
+    val temp: Double,
+    val electric: Double,
+    val hits: List<MoodHit>
+) {
+    /** No Moon aspect in orb at all. */
+    val quiet: Boolean
+        get() = hits.isEmpty()
+}
