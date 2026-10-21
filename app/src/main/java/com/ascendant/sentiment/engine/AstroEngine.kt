@@ -586,6 +586,50 @@ object AstroEngine {
         }
     }
 
+    // v4.3: MACD settings in 5-minute bars (classic 12 / 26 / 9 = 1h / 2h10m / 45m)
+    private const val MACD_FAST = 12
+    private const val MACD_SLOW = 26
+    private const val MACD_SIGNAL = 9
+
+    private fun ema(x: DoubleArray, n: Int): DoubleArray {
+        val a = 2.0 / (n + 1)
+        val out = DoubleArray(x.size)
+        for (i in x.indices) out[i] = if (i == 0) x[0] else a * x[i] + (1.0 - a) * out[i - 1]
+        return out
+    }
+
+    /** v4.3: MACD of the net. The EMAs start from the first bar, so the first ~26 bars are still settling. */
+    fun macdOfNet(series: List<SentimentBar>): MacdSeries {
+        val net = DoubleArray(series.size) { series[it].resNet }
+        val fast = ema(net, MACD_FAST)
+        val slow = ema(net, MACD_SLOW)
+        val macd = DoubleArray(net.size) { fast[it] - slow[it] }
+        val signal = ema(macd, MACD_SIGNAL)
+        return MacdSeries(macd, signal, DoubleArray(net.size) { macd[it] - signal[it] })
+    }
+
+    /**
+     * v4.3: zero-cross flags. +1 on the bar where the net turns bullish, -1 where it turns bearish, 0 otherwise.
+     * A flip only counts once the net passes a dead band (5% of the biggest bar in the series) on the other side,
+     * so small wobbles around zero do not spray flags.
+     */
+    fun zeroCrossFlags(series: List<SentimentBar>): IntArray {
+        val n = series.size
+        val flags = IntArray(n)
+        if (n == 0) return flags
+        val band = 0.05 * max(1.0, series.maxOf { max(it.resBull, it.resBear) })
+        var state = 0
+        for (i in 0 until n) {
+            val v = series[i].resNet
+            val s = if (v > band) 1 else if (v < -band) -1 else 0
+            if (s != 0) {
+                if (state != 0 && s != state) flags[i] = s
+                state = s
+            }
+        }
+        return flags
+    }
+
     /** Smarket = Sum(Sp x Wp x Cj) / Sum(Wp), with Wp the dynamic weight. */
     fun calculateScore(aspects: List<AspectInfo>): Double {
         if (aspects.isEmpty()) return 0.0

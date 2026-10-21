@@ -13,6 +13,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
@@ -23,6 +24,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.ascendant.sentiment.model.MacdSeries
 import com.ascendant.sentiment.model.SentimentBar
 import com.ascendant.sentiment.ui.theme.*
 import kotlin.math.abs
@@ -36,6 +38,9 @@ private val MagentaBright = Color(0xFFFF00FF)
 private val StochYellow = Color(0xFFFACC15)
 private val BaseSky = Color(0xFF38BDF8)
 private val PulseViolet = Color(0xFFA78BFA)
+private val MacdCyan = Color(0xFF22D3EE)
+private val SignalOrange = Color(0xFFFB923C)
+private val ShareNeutral = Color(0xFF64748B)
 private const val BAR_ALPHA = 0.40f
 private const val BAR_ALPHA_MAGENTA = 0.75f
 
@@ -70,6 +75,7 @@ fun SentimentChart(
     inspectedTimeMs: Long,
     onInspectTime: (Long) -> Unit,
     stoch: DoubleArray? = null,
+    flags: IntArray? = null,
     view: IntArray = remember(series) { intArrayOf(0, series.size, 1000) },
     zoom: Float = 1f,
     onZoomBy: (Float) -> Unit = {},
@@ -271,6 +277,38 @@ fun SentimentChart(
             )
         }
 
+        // v4.3: zero-cross flags. Green triangle (bottom edge) = net turned bullish, red triangle (top edge) = turned bearish
+        if (flags != null && flags.size == numBars) {
+            val s = 5.dp.toPx()
+            val yBottom = topMargin + plotHeight - 2.dp.toPx()
+            val yTop = topMargin + 2.dp.toPx()
+            for (i in firstVisible until firstVisible + count) {
+                val f = flags[i]
+                if (f == 0) continue
+                val x = leftMargin + (i - firstVisible + 0.5f) * barWidth
+                val col = if (f > 0) Emerald400 else Rose400
+                drawLine(
+                    color = col.copy(alpha = 0.3f),
+                    start = Offset(x, topMargin),
+                    end = Offset(x, topMargin + plotHeight),
+                    strokeWidth = 1f,
+                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(4f, 6f), 0f)
+                )
+                val tri = Path()
+                if (f > 0) {
+                    tri.moveTo(x, yBottom - s)
+                    tri.lineTo(x - s, yBottom)
+                    tri.lineTo(x + s, yBottom)
+                } else {
+                    tri.moveTo(x, yTop + s)
+                    tri.lineTo(x - s, yTop)
+                    tri.lineTo(x + s, yTop)
+                }
+                tri.close()
+                drawPath(path = tri, color = col)
+            }
+        }
+
         // Slow stochastic of the net: yellow line, 0..100 mapped to -max..+max
         if (stoch != null && stoch.size == numBars) {
             fun stochY(k: Double): Float = getY((k / 50.0 - 1.0) * maxVal)
@@ -460,5 +498,188 @@ fun DetrendedPane(
         scaleLabel("+" + fmtScale(maxVal), maxVal, Emerald400.copy(alpha = 0.8f))
         scaleLabel("0", 0.0, Slate400)
         scaleLabel("−" + fmtScale(maxVal), -maxVal, Rose400.copy(alpha = 0.8f))
+    }
+}
+
+/**
+ * v4.3: MACD sub pane. Histogram = macd - signal (green above zero, red below),
+ * cyan line = MACD (fast EMA - slow EMA of the net), orange line = signal. Shares the main chart window.
+ */
+@Composable
+fun MacdPane(
+    series: List<SentimentBar>,
+    macd: MacdSeries,
+    inspectedTimeMs: Long,
+    view: IntArray,
+    zoom: Float,
+    modifier: Modifier = Modifier.fillMaxWidth().height(104.dp)
+) {
+    if (series.isEmpty() || macd.macd.size != series.size) return
+
+    val numBars = series.size
+    val firstT = series.first().timeMs
+    val selIdx = ((inspectedTimeMs - firstT) / 300_000.0).toInt().coerceIn(0, numBars - 1)
+    val start = view[0].coerceIn(0, numBars - 1)
+    val count = view[1].coerceIn(1, numBars - start)
+    val maxVal = remember(macd) {
+        var m = 0.5
+        for (i in 0 until numBars) {
+            m = max(m, max(abs(macd.macd[i]), max(abs(macd.signal[i]), abs(macd.hist[i]))) * 1.05)
+        }
+        niceCeil(m)
+    }
+    val zoomKey = zoom
+
+    Canvas(modifier = modifier) {
+        val leftMargin = 42.dp.toPx()
+        val topMargin = 6.dp.toPx()
+        val bottomMargin = 6.dp.toPx()
+        val plotWidth = size.width - leftMargin - 12.dp.toPx()
+        val plotHeight = size.height - topMargin - bottomMargin
+        fun getY(v: Double): Float = (topMargin + (plotHeight / 2.0) * (1.0 - v / maxVal)).toFloat()
+
+        drawRect(color = BgDark, size = size)
+        val yZero = getY(0.0)
+
+        listOf(1.0, -1.0).forEach { f ->
+            drawLine(
+                color = Color(0xFF475569).copy(alpha = 0.35f),
+                start = Offset(leftMargin, getY(f * maxVal)),
+                end = Offset(leftMargin + plotWidth, getY(f * maxVal)),
+                strokeWidth = 1f
+            )
+        }
+        drawLine(
+            color = Color(0xFF475569),
+            start = Offset(leftMargin - 4.dp.toPx(), yZero),
+            end = Offset(leftMargin + plotWidth, yZero),
+            strokeWidth = 1.5f
+        )
+
+        val barWidth = plotWidth / count
+
+        // histogram
+        for (i in start until start + count) {
+            val h = macd.hist[i]
+            if (h == 0.0) continue
+            val y = getY(h)
+            drawRect(
+                color = (if (h > 0) Emerald500 else Rose500).copy(alpha = 0.55f),
+                topLeft = Offset(leftMargin + (i - start) * barWidth, minOf(yZero, y)),
+                size = Size(maxOf(barWidth - 1f, 1.5f), maxOf(abs(y - yZero), 1f))
+            )
+        }
+
+        // MACD and signal lines
+        fun line(values: DoubleArray, color: Color, width: Float) {
+            val p = Path()
+            for (i in start until start + count) {
+                val x = leftMargin + (i - start + 0.5f) * barWidth
+                val y = getY(values[i])
+                if (i == start) p.moveTo(x, y) else p.lineTo(x, y)
+            }
+            drawPath(
+                path = p,
+                color = color,
+                style = Stroke(width = width, cap = StrokeCap.Round, join = StrokeJoin.Round)
+            )
+        }
+        line(macd.signal, SignalOrange, 1.8f)
+        line(macd.macd, MacdCyan, 2.2f)
+
+        // cursor
+        val selX = leftMargin + (selIdx - start + 0.5f) * barWidth
+        drawLine(
+            color = Color.White,
+            start = Offset(selX, topMargin),
+            end = Offset(selX, topMargin + plotHeight),
+            strokeWidth = 2f
+        )
+
+        val labelPaint = android.graphics.Paint().apply {
+            isAntiAlias = true
+            textSize = 9.sp.toPx()
+            textAlign = android.graphics.Paint.Align.RIGHT
+        }
+        fun scaleLabel(text: String, v: Double, color: Color) {
+            labelPaint.color = color.toArgb()
+            drawContext.canvas.nativeCanvas.drawText(
+                text,
+                leftMargin - 7.dp.toPx(),
+                getY(v) + labelPaint.textSize * 0.35f,
+                labelPaint
+            )
+        }
+        scaleLabel("+" + fmtScale(maxVal), maxVal, Emerald400.copy(alpha = 0.8f))
+        scaleLabel("0", 0.0, Slate400)
+        scaleLabel("−" + fmtScale(maxVal), -maxVal, Rose400.copy(alpha = 0.8f))
+    }
+}
+
+/**
+ * v4.3: bull share strip. One cell per bar. Colour = bull share of the total resonance
+ * (red = all bearish, grey = 50/50, green = all bullish); brighter = more total resonance on that bar.
+ */
+@Composable
+fun BullSharePane(
+    series: List<SentimentBar>,
+    inspectedTimeMs: Long,
+    view: IntArray,
+    zoom: Float,
+    modifier: Modifier = Modifier.fillMaxWidth().height(26.dp)
+) {
+    if (series.isEmpty()) return
+
+    val numBars = series.size
+    val firstT = series.first().timeMs
+    val selIdx = ((inspectedTimeMs - firstT) / 300_000.0).toInt().coerceIn(0, numBars - 1)
+    val start = view[0].coerceIn(0, numBars - 1)
+    val count = view[1].coerceIn(1, numBars - start)
+    val maxTotal = remember(series) { max(1e-9, series.maxOf { it.resBull + it.resBear }) }
+    val zoomKey = zoom
+
+    Canvas(modifier = modifier) {
+        val leftMargin = 42.dp.toPx()
+        val plotWidth = size.width - leftMargin - 12.dp.toPx()
+        val barWidth = plotWidth / count
+
+        drawRect(color = BgDark, size = size)
+
+        for (i in start until start + count) {
+            val b = series[i]
+            val total = b.resBull + b.resBear
+            if (total < 1e-9) continue
+            val share = b.resShare.toFloat()
+            val base = if (share < 0.5f) lerp(Rose500, ShareNeutral, share * 2f) else lerp(ShareNeutral, Emerald500, (share - 0.5f) * 2f)
+            val activity = (0.35f + 0.65f * (total / maxTotal).toFloat()).coerceIn(0.35f, 1f)
+            drawRect(
+                color = base.copy(alpha = activity),
+                topLeft = Offset(leftMargin + (i - start) * barWidth, 2.dp.toPx()),
+                size = Size(maxOf(barWidth, 1.5f), size.height - 4.dp.toPx())
+            )
+        }
+
+        // cursor
+        val selX = leftMargin + (selIdx - start + 0.5f) * barWidth
+        drawLine(
+            color = Color.White,
+            start = Offset(selX, 0f),
+            end = Offset(selX, size.height),
+            strokeWidth = 2f
+        )
+
+        // label in the left gap
+        val labelPaint = android.graphics.Paint().apply {
+            isAntiAlias = true
+            textSize = 9.sp.toPx()
+            textAlign = android.graphics.Paint.Align.RIGHT
+            color = Slate400.toArgb()
+        }
+        drawContext.canvas.nativeCanvas.drawText(
+            "bull %",
+            leftMargin - 7.dp.toPx(),
+            size.height / 2f + labelPaint.textSize * 0.35f,
+            labelPaint
+        )
     }
 }

@@ -82,6 +82,10 @@ data class SentimentBar(
     // v4.2: net of the base field (no trigger boost); resNet - resBase is the Asc / MC pulse
     val resBase: Double = 0.0
 ) {
+    /** v4.3: bullish share of the total resonance, 0 to 1 (0.5 when the bar has no resonance at all). */
+    val resShare: Double
+        get() = if (resBull + resBear < 1e-9) 0.5 else resBull / (resBull + resBear)
+
     /** v4.2: the part of the net that comes from Asc / MC trigger boosts. */
     val resPulse: Double
         get() = resNet - resBase
@@ -115,4 +119,11 @@ data class GeoLocation(
     val lat: Double,
     val lon: Double,
     val market: String
+)
+
+/** v4.3: MACD of the net resonance: macd = fast EMA - slow EMA, signal = EMA of macd, hist = macd - signal. */
+class MacdSeries(
+    val macd: DoubleArray,
+    val signal: DoubleArray,
+    val hist: DoubleArray
 )

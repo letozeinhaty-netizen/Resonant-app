@@ -97,6 +97,10 @@ fun MainScreen(
     var orbFalloff by remember { mutableStateOf(true) }   // v4.0: resonance orb falloff (1 - orb/3)
     var pairBoost by remember { mutableStateOf(true) }    // v4.0: x1.5 when a planet aspects its own natal position
     var trigger by remember { mutableStateOf(true) }      // v4.0: Ascendant / Midheaven trigger boost
+    var showFlags by remember { mutableStateOf(true) }    // v4.3: zero-cross flags on the main chart
+    var showShare by remember { mutableStateOf(true) }    // v4.3: bull share strip
+    var showDetr by remember { mutableStateOf(true) }     // v4.2: detrended net pane
+    var showMacd by remember { mutableStateOf(true) }     // v4.3: MACD pane
 
     val locations = AstroEngine.PRESET_LOCATIONS
     val activeLocation = locations[selectedLocationIdx]
@@ -135,6 +139,8 @@ fun MainScreen(
     // v4.2: visible window shared by the main chart and the detrended pane, and the detrended net (net minus 1-hour average)
     val chartView = remember(series) { intArrayOf(0, series.size, 1000) }
     val detr = remember(series) { AstroEngine.detrendedNet(series) }
+    val macd = remember(series) { AstroEngine.macdOfNet(series) }          // v4.3
+    val crossFlags = remember(series) { AstroEngine.zeroCrossFlags(series) } // v4.3
 
     // v4.1: slow stochastic of the net resonance (yellow line)
     val stoch = remember(series) { AstroEngine.stochasticOfNet(series) }
@@ -349,6 +355,24 @@ fun MainScreen(
                     ResonanceSwitch("Pair boost ×1.5", pairBoost, Modifier.weight(1f)) { onHaptic(); pairBoost = it }
                 }
                 ResonanceSwitch("Asc / MC trigger boost (+0.5 each, max ×2)", trigger, Modifier.fillMaxWidth()) { onHaptic(); trigger = it }
+
+                // v4.3: show / hide the extra panes and flags (they take screen space)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    ResonanceSwitch("Zero-cross flags", showFlags, Modifier.weight(1f)) { onHaptic(); showFlags = it }
+                    ResonanceSwitch("Bull share strip", showShare, Modifier.weight(1f)) { onHaptic(); showShare = it }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    ResonanceSwitch("Detrended pane", showDetr, Modifier.weight(1f)) { onHaptic(); showDetr = it }
+                    ResonanceSwitch("MACD pane", showMacd, Modifier.weight(1f)) { onHaptic(); showMacd = it }
+                }
             }
         }
 
@@ -413,7 +437,7 @@ fun MainScreen(
                     }
                 }
                 Text(
-                    text = "Green up: bullish  |  red down: bearish  |  white tick: net  |  sky line: base  |  violet: Asc/MC pulse  |  yellow: stochastic  |  magenta: hard Pluto  |  auto scale  |  pinch or +/- to zoom",
+                    text = "Green up: bullish  |  red down: bearish  |  white tick: net  |  sky line: base  |  violet: Asc/MC pulse  |  yellow: stochastic  |  ▲▼: net crosses zero  |  magenta: hard Pluto  |  auto scale  |  pinch or +/- to zoom",
                     fontSize = 10.sp,
                     color = Slate400,
                     modifier = Modifier.padding(top = 2.dp)
@@ -458,6 +482,7 @@ fun MainScreen(
                         series = series,
                         inspectedTimeMs = currentBar?.timeMs ?: inspectedTimeMs,
                         stoch = stoch,
+                        flags = if (showFlags) crossFlags else null,
                         view = chartView,
                         zoom = zoom,
                         onZoomBy = { f -> zoom = (zoom * f).coerceIn(1f, 12f) },
@@ -478,43 +503,70 @@ fun MainScreen(
                     )
                 }
 
-                // v4.2: detrended net pane, lined up under the chart
-                Spacer(modifier = Modifier.height(8.dp))
-                val detrNow = currentBar?.let { detr.getOrNull(((it.timeMs - series.first().timeMs) / 300_000L).toInt()) }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "DETRENDED NET  (net − 1h average)",
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Slate400
+                // v4.3: sub panes lined up under the chart (each one has a switch)
+                val curIdx = currentBar
+                    ?.let { ((it.timeMs - series.first().timeMs) / 300_000L).toInt().coerceIn(0, series.size - 1) }
+                    ?: 0
+
+                if (showShare && currentBar != null) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    val share = currentBar.resShare
+                    PaneHeader(
+                        title = "BULL SHARE  (bull ÷ total, brighter = more resonance)",
+                        value = "%.0f%%".format(share * 100.0),
+                        valueColor = if (share > 0.55) Emerald400 else if (share < 0.45) Rose400 else Slate400
                     )
-                    if (detrNow != null) {
-                        Text(
-                            text = (if (detrNow > 0) "+" else "") + "%.2f".format(detrNow),
-                            fontSize = 11.sp,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Bold,
-                            color = if (detrNow > 0) Emerald400 else if (detrNow < 0) Rose400 else Slate400
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Box(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))) {
+                        BullSharePane(
+                            series = series,
+                            inspectedTimeMs = currentBar.timeMs,
+                            view = chartView,
+                            zoom = zoom
                         )
                     }
                 }
-                Spacer(modifier = Modifier.height(4.dp))
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                ) {
-                    DetrendedPane(
-                        series = series,
-                        detr = detr,
-                        inspectedTimeMs = currentBar?.timeMs ?: inspectedTimeMs,
-                        view = chartView,
-                        zoom = zoom
+
+                if (showDetr) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    val detrNow = detr.getOrNull(curIdx)
+                    PaneHeader(
+                        title = "DETRENDED NET  (net − 1h average)",
+                        value = detrNow?.let { (if (it > 0) "+" else "") + "%.2f".format(it) },
+                        valueColor = if ((detrNow ?: 0.0) > 0) Emerald400 else if ((detrNow ?: 0.0) < 0) Rose400 else Slate400
                     )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Box(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))) {
+                        DetrendedPane(
+                            series = series,
+                            detr = detr,
+                            inspectedTimeMs = currentBar?.timeMs ?: inspectedTimeMs,
+                            view = chartView,
+                            zoom = zoom
+                        )
+                    }
+                }
+
+                if (showMacd) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    val hNow = macd.hist.getOrNull(curIdx) ?: 0.0
+                    val mNow = macd.macd.getOrNull(curIdx) ?: 0.0
+                    val sNow = macd.signal.getOrNull(curIdx) ?: 0.0
+                    PaneHeader(
+                        title = "MACD OF NET  (cyan MACD, orange signal)",
+                        value = "M %+.2f  S %+.2f  H %+.2f".format(mNow, sNow, hNow),
+                        valueColor = if (hNow > 0) Emerald400 else if (hNow < 0) Rose400 else Slate400
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Box(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))) {
+                        MacdPane(
+                            series = series,
+                            macd = macd,
+                            inspectedTimeMs = currentBar?.timeMs ?: inspectedTimeMs,
+                            view = chartView,
+                            zoom = zoom
+                        )
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(10.dp))
@@ -627,5 +679,32 @@ private fun ResonanceSwitch(label: String, checked: Boolean, modifier: Modifier 
         )
         Spacer(modifier = Modifier.width(6.dp))
         Text(label, fontSize = 11.sp, color = Slate100)
+    }
+}
+
+/** v4.3: title on the left, current value on the right, used above each sub pane. */
+@Composable
+private fun PaneHeader(title: String, value: String?, valueColor: Color) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = title,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold,
+            color = Slate400,
+            modifier = Modifier.weight(1f)
+        )
+        if (value != null) {
+            Text(
+                text = value,
+                fontSize = 11.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Bold,
+                color = valueColor
+            )
+        }
     }
 }
