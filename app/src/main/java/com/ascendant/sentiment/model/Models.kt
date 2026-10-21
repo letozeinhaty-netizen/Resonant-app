@@ -154,3 +154,65 @@ class MoodPoint(
     val quiet: Boolean
         get() = hits.isEmpty()
 }
+
+/** v6.0: a stretch where the Moon is void of course (no more exact major aspects before it leaves its sign). */
+class VocSpan(val startMs: Long, val endMs: Long)
+
+/** v6.0: a planet close to standing still. strength 0..1 (1 = exactly stationary). */
+class StationItem(
+    val planetName: String,
+    val glyph: String,
+    val strength: Double,
+    val turningRetro: Boolean   // true = about to turn retrograde, false = about to turn direct
+)
+
+/** v6.0: station proximity at one moment. index 0..100 (planet weights x closeness to standing still). */
+class StationPoint(
+    val timeMs: Long,
+    val index: Double,
+    val items: List<StationItem>
+)
+
+/** v6.0: one planet-to-planet aspect in the sky field. value > 0 bullish, < 0 bearish. */
+class SkyHit(
+    val actorName: String,
+    val actorGlyph: String,
+    val targetName: String,
+    val targetGlyph: String,
+    val aspectAngle: Int,
+    val orbDiff: Double,
+    val value: Double
+)
+
+/** v6.1: the turning-point layer, one entry per bar of the main series. */
+class TurningData(
+    val voc: BooleanArray,                   // Moon void of course on this bar
+    val stationIndex: DoubleArray,           // 0..100, how close the heavy planets are to a station
+    val stations: List<List<StationItem>>,   // planets in their station zone on this bar
+    val sky: DoubleArray,                    // sky field value on this bar (planet to planet, Moon left out)
+    val vocSpans: List<VocSpan>,
+    val flagged: BooleanArray                // voc or station index at or above STATION_CONTEXT, for the context markers
+)
+
+/** v6.1: one 6-hour bar of the sky field week (each value is the average of six hourly readings). */
+class SkyBar(
+    val startMs: Long,
+    val tt: Double,                          // transit-to-transit field, Moon left out
+    val tn: Double,                          // transit-to-natal field, no Asc / MC trigger boost
+    val vocShare: Double,                    // 0..1, share of the bar the Moon is void of course
+    val stationIndex: Double,                // highest station index inside the bar
+    val stations: List<StationItem>          // planets in their station zone at that peak
+) {
+    val total: Double
+        get() = tt + tn
+}
+
+/** v6.1: the week view: 6-hour bars plus the MACD of the total (macd, signal, hist per bar). */
+class SkyWeek(
+    val bars: List<SkyBar>,
+    val macd: DoubleArray,
+    val signal: DoubleArray,
+    val hist: DoubleArray,
+    val vocSpans: List<VocSpan>,
+    val barMs: Long
+)

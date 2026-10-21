@@ -24,7 +24,9 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.ascendant.sentiment.engine.AstroEngine
 import com.ascendant.sentiment.model.MacdSeries
+import com.ascendant.sentiment.model.TurningData
 import com.ascendant.sentiment.model.SentimentBar
 import com.ascendant.sentiment.ui.theme.*
 import kotlin.math.abs
@@ -45,7 +47,7 @@ private const val BAR_ALPHA = 0.40f
 private const val BAR_ALPHA_MAGENTA = 0.75f
 
 /** Rounds a positive value up to 1, 2, 2.5, 5 or 10 times a power of ten (clean axis labels). */
-private fun niceCeil(v: Double): Double {
+internal fun niceCeil(v: Double): Double {
     val p = 10.0.pow(floor(log10(v)))
     val f = v / p
     val n = when {
@@ -58,7 +60,7 @@ private fun niceCeil(v: Double): Double {
     return n * p
 }
 
-private fun fmtScale(v: Double): String = if (v >= 10.0) "%.0f".format(v) else if (v >= 1.0 && v == floor(v)) "%.0f".format(v) else "%.2f".format(v).trimEnd('0').trimEnd('.')
+internal fun fmtScale(v: Double): String = if (v >= 10.0) "%.0f".format(v) else if (v >= 1.0 && v == floor(v)) "%.0f".format(v) else "%.2f".format(v).trimEnd('0').trimEnd('.')
 
 /**
  * v4.0: 5-minute transit vs natal RESONANCE bars. Green bar up = weighted bullish resonance,
@@ -76,6 +78,7 @@ fun SentimentChart(
     onInspectTime: (Long) -> Unit,
     stoch: DoubleArray? = null,
     flags: IntArray? = null,
+    flagged: BooleanArray? = null,   // v6.1: bars inside a void-of-course or station stretch (amber ring on their flags)
     view: IntArray = remember(series) { intArrayOf(0, series.size, 1000) },
     zoom: Float = 1f,
     onZoomBy: (Float) -> Unit = {},
@@ -306,6 +309,15 @@ fun SentimentChart(
                 }
                 tri.close()
                 drawPath(path = tri, color = col)
+                if (flagged != null && flagged.size == numBars && flagged[i]) {
+                    val cy = if (f > 0) yBottom - s * 0.5f else yTop + s * 0.5f
+                    drawCircle(
+                        color = Amber500,
+                        radius = s + 3.dp.toPx(),
+                        center = Offset(x, cy),
+                        style = Stroke(width = 1.8f)
+                    )
+                }
             }
         }
 
@@ -418,6 +430,8 @@ fun DetrendedPane(
     inspectedTimeMs: Long,
     view: IntArray,
     zoom: Float,
+    td: TurningData? = null,          // v6.1: void-of-course dimming and station rings
+    skyTint: Boolean = false,         // v6.1: background tinted by the sign of the sky field
     modifier: Modifier = Modifier.fillMaxWidth().height(96.dp)
 ) {
     if (series.isEmpty() || detr.size != series.size) return
@@ -443,6 +457,19 @@ fun DetrendedPane(
         drawRect(color = BgDark, size = size)
         val yZero = getY(0.0)
 
+        // v6.1: sky field tint behind the bars (green = sky field bullish, red = bearish)
+        if (skyTint && td != null && td.sky.size == numBars) {
+            val bwT = plotWidth / count
+            for (i in start until start + count) {
+                val t = AstroEngine.skyTint(td.sky[i])
+                drawRect(
+                    color = (if (t >= 0) Emerald500 else Rose500).copy(alpha = (0.25 * abs(t)).toFloat()),
+                    topLeft = Offset(leftMargin + (i - start) * bwT, topMargin),
+                    size = Size(maxOf(bwT, 1f), plotHeight)
+                )
+            }
+        }
+
         // faint +-max guides and the zero line
         listOf(1.0, -1.0).forEach { f ->
             drawLine(
@@ -464,11 +491,29 @@ fun DetrendedPane(
             val v = detr[i]
             if (v == 0.0) continue
             val y = getY(v)
+            val dim = td != null && td.voc.size == numBars && td.voc[i]
             drawRect(
-                color = (if (v > 0) Emerald500 else Rose500).copy(alpha = 0.75f),
+                color = (if (v > 0) Emerald500 else Rose500).copy(alpha = if (dim) 0.35f else 0.75f),
                 topLeft = Offset(leftMargin + (i - start) * barWidth, minOf(yZero, y)),
                 size = Size(maxOf(barWidth - 1f, 1.5f), maxOf(abs(y - yZero), 1f))
             )
+        }
+
+        // v6.1: amber rings on swing peaks and troughs that fall inside a station zone
+        if (td != null && td.stationIndex.size == numBars) {
+            for (i in maxOf(start, 1) until minOf(start + count, numBars - 1)) {
+                val v = detr[i]
+                val isPeak = v > 0 && v >= detr[i - 1] && v > detr[i + 1] && v >= 0.5 * maxVal
+                val isTrough = v < 0 && v <= detr[i - 1] && v < detr[i + 1] && v <= -0.5 * maxVal
+                if ((isPeak || isTrough) && td.stationIndex[i] >= AstroEngine.STATION_CONTEXT) {
+                    drawCircle(
+                        color = Amber500,
+                        radius = 4.dp.toPx(),
+                        center = Offset(leftMargin + (i - start + 0.5f) * barWidth, getY(v)),
+                        style = Stroke(width = 1.8f)
+                    )
+                }
+            }
         }
 
         // Inspected bar cursor, same white line as the main chart
@@ -512,6 +557,7 @@ fun MacdPane(
     inspectedTimeMs: Long,
     view: IntArray,
     zoom: Float,
+    flagged: BooleanArray? = null,   // v6.1: amber dots on MACD crossings inside void-of-course or station stretches
     modifier: Modifier = Modifier.fillMaxWidth().height(104.dp)
 ) {
     if (series.isEmpty() || macd.macd.size != series.size) return
@@ -586,6 +632,17 @@ fun MacdPane(
         }
         line(macd.signal, SignalOrange, 1.8f)
         line(macd.macd, MacdCyan, 2.2f)
+        if (flagged != null && flagged.size == numBars) {
+            for (i in maxOf(start, 1) until start + count) {
+                if (flagged[i] && macd.hist[i] * macd.hist[i - 1] < 0) {
+                    drawCircle(
+                        color = Amber500,
+                        radius = 4.dp.toPx(),
+                        center = Offset(leftMargin + (i - start + 0.5f) * barWidth, getY(macd.macd[i]))
+                    )
+                }
+            }
+        }
 
         // cursor
         val selX = leftMargin + (selIdx - start + 0.5f) * barWidth

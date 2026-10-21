@@ -102,6 +102,10 @@ fun MainScreen(
     var showDetr by remember { mutableStateOf(true) }     // v4.2: detrended net pane
     var showMacd by remember { mutableStateOf(true) }     // v4.3: MACD pane
     var showMood by remember { mutableStateOf(true) }     // v5.0: Moon mood card
+    var showVoc by remember { mutableStateOf(true) }      // v6.1: void-of-course Moon row
+    var showStations by remember { mutableStateOf(true) } // v6.1: station row
+    var showSky by remember { mutableStateOf(true) }      // v6.1: sky field week card
+    var skyTintOn by remember { mutableStateOf(true) }    // v6.1: sky tint on the detrended pane
 
     val locations = AstroEngine.PRESET_LOCATIONS
     val activeLocation = locations[selectedLocationIdx]
@@ -146,6 +150,16 @@ fun MainScreen(
         if (showMood) AstroEngine.calculateMoodSeries(dayBounds.first, dayBounds.second) else emptyList()
     }
     val macd = remember(series) { AstroEngine.macdOfNet(series) }          // v4.3
+    // v6.1: turning points (void-of-course Moon, stations) and the sky field per bar
+    val td = remember(series, taintAllMm) { AstroEngine.turningData(series, 3.0, taintAllMm) }
+    // v6.1: sky field week card, 6-hour bars, recomputed when the local week changes or the switches change
+    val weekBounds = remember(inspectedTimeMs / 86_400_000L, selectedTimezone) { AstroEngine.weekBoundsMs(inspectedTimeMs, selectedTimezone) }
+    val skyWeek = remember(weekBounds.first, showSky, useSd, usePm, taintAllMm, orbFalloff, pairBoost) {
+        if (showSky) AstroEngine.calculateSkyWeek(
+            startMs = weekBounds.first, useSd = useSd, usePm = usePm, taintAllMm = taintAllMm,
+            orbFalloff = orbFalloff, pairBoost = pairBoost
+        ) else null
+    }
     val crossFlags = remember(series) { AstroEngine.zeroCrossFlags(series) } // v4.3
 
     // v4.1: slow stochastic of the net resonance (yellow line)
@@ -166,6 +180,7 @@ fun MainScreen(
         }
     }
 
+    val hmSdf = remember(selectedTimezone) { java.text.SimpleDateFormat("HH:mm", java.util.Locale.US).apply { timeZone = java.util.TimeZone.getTimeZone(selectedTimezone) } }
     val liveSdf = remember(selectedTimezone) {
         SimpleDateFormat("EEE, dd MMM HH:mm:ss", Locale.US).apply {
             timeZone = TimeZone.getTimeZone(selectedTimezone)
@@ -380,6 +395,14 @@ fun MainScreen(
                     ResonanceSwitch("MACD pane", showMacd, Modifier.weight(1f)) { onHaptic(); showMacd = it }
                 }
                 ResonanceSwitch("Moon mood card (temperature of the day)", showMood, Modifier.fillMaxWidth()) { onHaptic(); showMood = it }
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    ResonanceSwitch("VOC Moon row", showVoc, Modifier.weight(1f)) { onHaptic(); showVoc = it }
+                    ResonanceSwitch("Station row", showStations, Modifier.weight(1f)) { onHaptic(); showStations = it }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    ResonanceSwitch("Sky field week card", showSky, Modifier.weight(1f)) { onHaptic(); showSky = it }
+                    ResonanceSwitch("Sky tint (detrended)", skyTintOn, Modifier.weight(1f)) { onHaptic(); skyTintOn = it }
+                }
             }
         }
 
@@ -490,6 +513,7 @@ fun MainScreen(
                         inspectedTimeMs = currentBar?.timeMs ?: inspectedTimeMs,
                         stoch = stoch,
                         flags = if (showFlags) crossFlags else null,
+                        flagged = td.flagged,
                         view = chartView,
                         zoom = zoom,
                         onZoomBy = { f -> zoom = (zoom * f).coerceIn(1f, 12f) },
@@ -549,7 +573,36 @@ fun MainScreen(
                             detr = detr,
                             inspectedTimeMs = currentBar?.timeMs ?: inspectedTimeMs,
                             view = chartView,
-                            zoom = zoom
+                            zoom = zoom,
+                            td = td,
+                            skyTint = skyTintOn
+                        )
+                    }
+                }
+
+                if (showVoc || showStations) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    val vocNow = currentBar?.let { b -> td.voc.getOrNull(curIdx) } == true
+                    val stnNow = td.stations.getOrNull(curIdx).orEmpty()
+                    val vocEnd = td.vocSpans.firstOrNull { (currentBar?.timeMs ?: inspectedTimeMs) in it.startMs until it.endMs }?.endMs
+                    PaneHeader(
+                        title = "TURNING POINTS  (blue = Moon void of course, amber = station)",
+                        value = buildString {
+                            if (vocNow && vocEnd != null) append("VOC until " + hmSdf.format(Date(vocEnd)) + "  ")
+                            append(stnNow.take(3).joinToString(" ") { it.glyph + if (it.turningRetro) "Rx" else "Dir" })
+                        }.ifBlank { null },
+                        valueColor = Amber500
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Box(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))) {
+                        TurningStrip(
+                            series = series,
+                            td = td,
+                            inspectedTimeMs = currentBar?.timeMs ?: inspectedTimeMs,
+                            view = chartView,
+                            zoom = zoom,
+                            showVoc = showVoc,
+                            showStations = showStations
                         )
                     }
                 }
@@ -569,6 +622,7 @@ fun MainScreen(
                         MacdPane(
                             series = series,
                             macd = macd,
+                            flagged = td.flagged,
                             inspectedTimeMs = currentBar?.timeMs ?: inspectedTimeMs,
                             view = chartView,
                             zoom = zoom
@@ -645,6 +699,22 @@ fun MainScreen(
                 inspectedTimeMs = inspectedTimeMs,
                 nowMs = nowMs,
                 timeZoneId = selectedTimezone,
+                onInspectTime = { t ->
+                    isLive = false
+                    if (series.isNotEmpty() && (t < series.first().timeMs || t > series.last().timeMs)) centerTimeMs = t
+                    inspectedTimeMs = t
+                }
+            )
+        }
+
+        // v6.1: sky field for the week (transit-to-transit, transit-to-natal and total, with MACD of the total)
+        if (showSky && skyWeek != null) {
+            SkyFieldCard(
+                week = skyWeek,
+                inspectedTimeMs = inspectedTimeMs,
+                nowMs = nowMs,
+                timeZoneId = selectedTimezone,
+                taintAllMm = taintAllMm,
                 onInspectTime = { t ->
                     isLive = false
                     if (series.isNotEmpty() && (t < series.first().timeMs || t > series.last().timeMs)) centerTimeMs = t

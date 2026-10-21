@@ -737,6 +737,316 @@ object AstroEngine {
         return if (electric >= MOOD_ELECTRIC_ON) "$base · ELECTRIC" else base
     }
 
+    // ---------------- v6.0: turning points (stations, void-of-course Moon) and the sky field ----------------
+
+    private fun signedDiff(a: Double, b: Double): Double = ((a - b + 540.0) % 360.0) - 180.0
+
+    // Typical maximum daily speed (degrees per day) of the planets that can station
+    private val STATION_VMAX = mapOf(
+        "Mercury" to 2.2, "Venus" to 1.25, "Mars" to 0.78, "Jupiter" to 0.24,
+        "Saturn" to 0.13, "Uranus" to 0.06, "Neptune" to 0.04, "Pluto" to 0.035
+    )
+    private const val STATION_ZONE = 0.10      // stationary zone: |speed| below 10% of the typical maximum speed
+    private const val STATION_REF = 10.0       // index 100 = a fully stationary planet of weight 10
+    const val STATION_CONTEXT = 25.0           // index at or above this counts as "near a station" for the context markers
+
+    /**
+     * Station proximity at one moment. Speeds come from the app's own positions: two 6-hour-baseline speeds,
+     * centred 12 hours before and 12 hours after ms. Their average is the speed now; their difference tells
+     * whether the planet is slowing toward a retrograde turn or speeding up away from one.
+     */
+    fun calculateStation(ms: Long): StationPoint {
+        val h = 3_600_000L
+        val bm = calculatePlanetaryPositions(ms - 15 * h)
+        val bp = calculatePlanetaryPositions(ms - 9 * h)
+        val am = calculatePlanetaryPositions(ms + 9 * h)
+        val ap = calculatePlanetaryPositions(ms + 15 * h)
+        val items = mutableListOf<StationItem>()
+        var raw = 0.0
+        PLANETS.forEachIndexed { i, p ->
+            val vmax = STATION_VMAX[p.name] ?: return@forEachIndexed
+            val vBefore = signedDiff(bp[i], bm[i]) / 0.25
+            val vAfter = signedDiff(ap[i], am[i]) / 0.25
+            val v = 0.5 * (vBefore + vAfter)
+            val s = 1.0 - abs(v) / (STATION_ZONE * vmax)
+            if (s > 0.0) {
+                raw += p.weight * s
+                items.add(StationItem(p.name, p.glyph, s, (vAfter - vBefore) < 0))
+            }
+        }
+        return StationPoint(ms, min(100.0, 100.0 * raw / STATION_REF), items.sortedByDescending { it.strength })
+    }
+
+    // Classic void of course: exact conjunction, sextile, square, trine, opposition (both sides) to the other planets
+    private val VOC_ANGLES = intArrayOf(0, 60, 90, 120, 180, 240, 270, 300)
+
+    /**
+     * Void-of-course Moon spans overlapping [fromMs, toMs]. Classic definition: from the Moon's last exact major
+     * aspect to another planet until it leaves its sign (a stay with no such aspect is void from the ingress).
+     * Scans in 15-minute steps with linear interpolation, padded 3 days each side so every stay is complete.
+     */
+    fun vocSpans(fromMs: Long, toMs: Long): List<VocSpan> {
+        val step = 900_000L
+        val pad = 3 * 86_400_000L
+        val t0 = ((fromMs - pad) / step) * step
+        val t1 = toMs + pad
+        val n = ((t1 - t0) / step).toInt() + 1
+        val moonIdx = PLANETS.indexOfFirst { it.name == "Moon" }
+        val ingress = ArrayList<Long>()
+        val events = ArrayList<Long>()
+        val prevX = Array(PLANETS.size) { DoubleArray(VOC_ANGLES.size) }
+        var prevMoon = 0.0
+        for (k in 0 until n) {
+            val t = t0 + k * step
+            val longs = calculatePlanetaryPositions(t)
+            val moon = longs[moonIdx]
+            for (j in PLANETS.indices) {
+                if (j == moonIdx) continue
+                for (a in VOC_ANGLES.indices) {
+                    val x = signedDiff(moon, longs[j] + VOC_ANGLES[a])
+                    if (k > 0) {
+                        val px = prevX[j][a]
+                        if (px < 0.0 && x >= 0.0 && (x - px) < 90.0) {
+                            events.add(t - step + (step * (-px / (x - px))).toLong())
+                        }
+                    }
+                    prevX[j][a] = x
+                }
+            }
+            if (k > 0) {
+                val signNow = floor(moon / 30.0).toInt()
+                val signPrev = floor(prevMoon / 30.0).toInt()
+                if (signNow != signPrev) {
+                    val boundary = signNow * 30.0
+                    val total = signedDiff(moon, prevMoon)
+                    val frac = if (total > 1e-9) (signedDiff(boundary, prevMoon) / total).coerceIn(0.0, 1.0) else 1.0
+                    ingress.add(t - step + (step * frac).toLong())
+                }
+            }
+            prevMoon = moon
+        }
+        events.sort()
+        val spans = mutableListOf<VocSpan>()
+        // every stay that starts at an ingress and ends at the next one is complete
+        for (q in 0 until ingress.size - 1) {
+            val a = ingress[q]
+            val b = ingress[q + 1]
+            val last = events.lastOrNull { it >= a && it < b } ?: a
+            if (last < b && b > fromMs && last < toMs) spans.add(VocSpan(last, b))
+        }
+        return spans
+    }
+
+    /** Name of the sign the Moon is in. */
+    fun moonSignName(ms: Long): String {
+        val moonIdx = PLANETS.indexOfFirst { it.name == "Moon" }
+        val lon = calculatePlanetaryPositions(ms)[moonIdx]
+        return ZODIAC[((floor(lon / 30.0).toInt() % 12) + 12) % 12]
+    }
+
+    // Sky field: planet-to-planet aspects, Moon left out (the Moon is the mood card's job)
+    const val SKY_SCALE = 6.0   // |field| of this size reads as a clearly tilted backdrop (see skyTint)
+
+    /**
+     * Sky field at one moment: sum over every aspecting planet j (not the Moon) on every other planet i (not the Moon)
+     * of Sp(j) x Wp(j) x Cj(j) x orbFactor. Same polarity rules as the rest of the app (taint included).
+     */
+    fun skyFieldValue(longs: DoubleArray, orbLimit: Double = 3.0, taintAllMm: Boolean = true): Double {
+        val moonIdx = PLANETS.indexOfFirst { it.name == "Moon" }
+        val tainted = taintedFlags(longs, orbLimit)
+        var sum = 0.0
+        for (j in PLANETS.indices) {
+            if (j == moonIdx) continue
+            for (i in PLANETS.indices) {
+                if (i == j || i == moonIdx) continue
+                val s = sep(longs[i], longs[j])
+                for (A in ANGLES) {
+                    val d = abs(s - A)
+                    if (d <= orbLimit) {
+                        sum += aspectPolarity(PLANETS[j], A, tainted[j], taintAllMm) *
+                            PLANETS[j].weight * cjFor(PLANETS[j], A) * (1.0 - d / orbLimit)
+                    }
+                }
+            }
+        }
+        return sum
+    }
+
+    fun skyFieldSeries(timesMs: LongArray, taintAllMm: Boolean = true, orbLimit: Double = 3.0): DoubleArray =
+        DoubleArray(timesMs.size) { skyFieldValue(calculatePlanetaryPositions(timesMs[it]), orbLimit, taintAllMm) }
+
+    /** Tint strength -1..+1 from a sky field value (smooth, fixed scale). */
+    fun skyTint(value: Double): Double = tanh(value / SKY_SCALE)
+
+    /** The aspects behind the sky field at one moment, biggest first. */
+    fun skyHits(ms: Long, taintAllMm: Boolean = true, orbLimit: Double = 3.0): List<SkyHit> {
+        val longs = calculatePlanetaryPositions(ms)
+        val moonIdx = PLANETS.indexOfFirst { it.name == "Moon" }
+        val tainted = taintedFlags(longs, orbLimit)
+        val out = mutableListOf<SkyHit>()
+        for (j in PLANETS.indices) {
+            if (j == moonIdx) continue
+            for (i in PLANETS.indices) {
+                if (i == j || i == moonIdx) continue
+                val s = sep(longs[i], longs[j])
+                for (A in ANGLES) {
+                    val d = abs(s - A)
+                    if (d <= orbLimit) {
+                        val v = aspectPolarity(PLANETS[j], A, tainted[j], taintAllMm) *
+                            PLANETS[j].weight * cjFor(PLANETS[j], A) * (1.0 - d / orbLimit)
+                        if (abs(v) > 1e-9) {
+                            out.add(SkyHit(PLANETS[j].name, PLANETS[j].glyph, PLANETS[i].name, PLANETS[i].glyph, A, d, v))
+                        }
+                    }
+                }
+            }
+        }
+        return out.sortedByDescending { abs(it.value) }
+    }
+
+    // ---------------- v6.1: per-bar turning data and the week view of the sky field ----------------
+
+    // Void-of-course spans are expensive to scan (15-minute steps), so the last scan is kept and reused
+    // while the requested range stays inside it.
+    private var vocCacheFrom = 0L
+    private var vocCacheTo = -1L
+    private var vocCache: List<VocSpan> = emptyList()
+
+    fun vocSpansCached(fromMs: Long, toMs: Long): List<VocSpan> {
+        val day = 86_400_000L
+        if (fromMs < vocCacheFrom || toMs > vocCacheTo) {
+            vocCacheFrom = fromMs - 2 * day
+            vocCacheTo = toMs + 6 * day
+            vocCache = vocSpans(vocCacheFrom, vocCacheTo)
+        }
+        return vocCache.filter { it.endMs > fromMs && it.startMs < toMs }
+    }
+
+    /**
+     * Turning-point layer for the main series, one entry per bar: void-of-course flag, station index and planets,
+     * and the sky field value. Stations change slowly, so they are worked out every 30 minutes and shared.
+     */
+    fun turningData(series: List<SentimentBar>, orbLimit: Double = 3.0, taintAllMm: Boolean = true): TurningData {
+        val n = series.size
+        if (n == 0) {
+            return TurningData(BooleanArray(0), DoubleArray(0), emptyList(), DoubleArray(0), emptyList(), BooleanArray(0))
+        }
+        val spans = vocSpansCached(series.first().timeMs, series.last().timeMs + 300_000L)
+        val voc = BooleanArray(n) { i -> spans.any { series[i].timeMs >= it.startMs && series[i].timeMs < it.endMs } }
+        val bucket = HashMap<Long, StationPoint>()
+        val stations = ArrayList<List<StationItem>>(n)
+        val idx = DoubleArray(n)
+        for (i in 0 until n) {
+            val key = (series[i].timeMs / 1_800_000L) * 1_800_000L
+            val sp = bucket.getOrPut(key) { calculateStation(key) }
+            stations.add(sp.items)
+            idx[i] = sp.index
+        }
+        val sky = DoubleArray(n) { skyFieldValue(series[it].planetaryLongitudes, orbLimit, taintAllMm) }
+        val flagged = BooleanArray(n) { voc[it] || idx[it] >= STATION_CONTEXT }
+        return TurningData(voc, idx, stations, sky, spans, flagged)
+    }
+
+    // MACD of the week total, in 6-hour bars: 4 / 9 / 3 bars = 24h / 54h / 18h (the classic 12 / 26 / 9 proportions)
+    private const val SKY_MACD_FAST = 4
+    private const val SKY_MACD_SLOW = 9
+    private const val SKY_MACD_SIGNAL = 3
+
+    /**
+     * v6.1: the week view. 6-hour bars, each the average of six hourly readings, of
+     *  - tt = transit-to-transit field (the sky itself, Moon left out),
+     *  - tn = transit-to-natal field (every transiting planet on every birth chart point, no Asc / MC trigger boost),
+     *  - total = tt + tn,
+     * plus how much of the bar the Moon is void of course, the highest station index in the bar, and the MACD of the
+     * total. The MACD is warmed up on bars before startMs, which are not part of the result.
+     */
+    fun calculateSkyWeek(
+        startMs: Long,
+        bars: Int = 28,
+        barMs: Long = 6 * 3_600_000L,
+        warmBars: Int = 12,
+        orbLimit: Double = 3.0,
+        useSd: Boolean = true,
+        usePm: Boolean = true,
+        taintAllMm: Boolean = true,
+        orbFalloff: Boolean = true,
+        pairBoost: Boolean = true
+    ): SkyWeek {
+        val hour = 3_600_000L
+        val perBar = max(1, (barMs / hour).toInt())
+        val all = warmBars + bars
+        val first = startMs - warmBars * barMs
+        val tt = DoubleArray(all)
+        val tn = DoubleArray(all)
+        for (k in 0 until all) {
+            var a = 0.0
+            var b = 0.0
+            for (h in 0 until perBar) {
+                val t = first + k * barMs + h * hour + hour / 2
+                val longs = calculatePlanetaryPositions(t)
+                a += skyFieldValue(longs, orbLimit, taintAllMm)
+                b += calculateResonance(
+                    longs, emptyList(), emptyList(), orbLimit, useSd, usePm, taintAllMm, orbFalloff, pairBoost, false
+                ).sumOf { it.value }
+            }
+            tt[k] = a / perBar
+            tn[k] = b / perBar
+        }
+        val total = DoubleArray(all) { tt[it] + tn[it] }
+        val macdAll = DoubleArray(all).also { out ->
+            val f = ema(total, SKY_MACD_FAST)
+            val s = ema(total, SKY_MACD_SLOW)
+            for (i in 0 until all) out[i] = f[i] - s[i]
+        }
+        val signalAll = ema(macdAll, SKY_MACD_SIGNAL)
+
+        val endMs = startMs + bars * barMs
+        val spans = vocSpansCached(startMs, endMs)
+        val out = ArrayList<SkyBar>(bars)
+        for (i in 0 until bars) {
+            val k = warmBars + i
+            val bStart = startMs + i * barMs
+            val bEnd = bStart + barMs
+            var vocMs = 0L
+            for (sp in spans) {
+                val o = min(bEnd, sp.endMs) - max(bStart, sp.startMs)
+                if (o > 0) vocMs += o
+            }
+            var bestIdx = -1.0
+            var bestItems: List<StationItem> = emptyList()
+            for (h in 0 until perBar) {
+                val sp = calculateStation(bStart + h * hour + hour / 2)
+                if (sp.index > bestIdx) {
+                    bestIdx = sp.index
+                    bestItems = sp.items
+                }
+            }
+            out.add(SkyBar(bStart, tt[k], tn[k], vocMs.toDouble() / barMs, max(0.0, bestIdx), bestItems))
+        }
+        return SkyWeek(
+            bars = out,
+            macd = DoubleArray(bars) { macdAll[warmBars + it] },
+            signal = DoubleArray(bars) { signalAll[warmBars + it] },
+            hist = DoubleArray(bars) { macdAll[warmBars + it] - signalAll[warmBars + it] },
+            vocSpans = spans,
+            barMs = barMs
+        )
+    }
+
+    /** Start and end (exclusive) of the week shown by the sky card: 2 days before to 5 days after the local day of ms. */
+    fun weekBoundsMs(ms: Long, timeZoneId: String, daysBack: Int = 2, daysForward: Int = 5): Pair<Long, Long> {
+        val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone(timeZoneId))
+        cal.timeInMillis = ms
+        cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
+        cal.set(java.util.Calendar.MINUTE, 0)
+        cal.set(java.util.Calendar.SECOND, 0)
+        cal.set(java.util.Calendar.MILLISECOND, 0)
+        cal.add(java.util.Calendar.DAY_OF_YEAR, -daysBack)
+        val start = cal.timeInMillis
+        cal.add(java.util.Calendar.DAY_OF_YEAR, daysBack + daysForward)
+        return start to cal.timeInMillis
+    }
+
     /** Smarket = Sum(Sp x Wp x Cj) / Sum(Wp), with Wp the dynamic weight. */
     fun calculateScore(aspects: List<AspectInfo>): Double {
         if (aspects.isEmpty()) return 0.0
