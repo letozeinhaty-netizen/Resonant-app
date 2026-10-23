@@ -60,7 +60,7 @@ internal fun niceCeil(v: Double): Double {
     return n * p
 }
 
-internal fun fmtScale(v: Double): String = if (v >= 10.0) "%.0f".format(v) else if (v >= 1.0 && v == floor(v)) "%.0f".format(v) else "%.2f".format(v).trimEnd('0').trimEnd('.')
+internal fun fmtScale(v: Double): String = if (v < 0.1) "%.3f".format(v).trimEnd('0').trimEnd('.') else if (v >= 10.0) "%.0f".format(v) else if (v >= 1.0 && v == floor(v)) "%.0f".format(v) else "%.2f".format(v).trimEnd('0').trimEnd('.')
 
 /**
  * v4.0: 5-minute transit vs natal RESONANCE bars. Green bar up = weighted bullish resonance,
@@ -432,6 +432,7 @@ fun DetrendedPane(
     zoom: Float,
     td: TurningData? = null,          // v6.1: void-of-course dimming and station rings
     skyTint: Boolean = false,         // v6.1: background tinted by the sign of the sky field
+    minScale: Double = 0.5,           // v6.4: smallest autoscale ceiling (the Midheaven index needs a much smaller one)
     modifier: Modifier = Modifier.fillMaxWidth().height(96.dp)
 ) {
     if (series.isEmpty() || detr.size != series.size) return
@@ -443,7 +444,7 @@ fun DetrendedPane(
     val start = view[0].coerceIn(0, numBars - 1)
     val count = view[1].coerceIn(1, numBars - start)
     // autoscale on the biggest detrended swing in the series (minimum 0.5 unit)
-    val maxVal = remember(detr) { niceCeil(max(0.5, detr.maxOf { abs(it) } * 1.05)) }
+    val maxVal = remember(detr) { niceCeil(max(minScale, detr.maxOf { abs(it) } * 1.05)) }
     val zoomKey = zoom   // reading zoom keeps this pane recomposing when the chart zoom changes
 
     Canvas(modifier = modifier) {

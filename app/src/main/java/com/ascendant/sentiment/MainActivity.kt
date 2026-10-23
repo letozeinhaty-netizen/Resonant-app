@@ -99,6 +99,7 @@ fun MainScreen(
     var trigger by remember { mutableStateOf(true) }      // v4.0: Ascendant / Midheaven trigger boost
     var showFlags by remember { mutableStateOf(true) }    // v4.3: zero-cross flags on the main chart
     var showShare by remember { mutableStateOf(true) }    // v4.3: bull share strip
+    var showDetrMc by remember { mutableStateOf(true) }   // v6.4: detrended Midheaven-natal pane
     var showDetr by remember { mutableStateOf(true) }     // v4.2: detrended net pane
     var showMacd by remember { mutableStateOf(true) }     // v4.3: MACD pane
     var showMood by remember { mutableStateOf(true) }     // v5.0: Moon mood card
@@ -146,6 +147,7 @@ fun MainScreen(
     // v4.2: visible window shared by the main chart and the detrended pane, and the detrended net (net minus 1-hour average)
     val chartView = remember(series) { intArrayOf(0, series.size, 1000) }
     val detr = remember(series) { AstroEngine.detrendedNet(series) }
+    val detrMc = remember(series) { AstroEngine.detrendedMc(series) }   // v6.4
     // v5.0: Moon mood for the local calendar day of the inspected time (recomputed only when the day changes)
     val dayBounds = remember(inspectedTimeMs, selectedTimezone) { AstroEngine.dayBoundsMs(inspectedTimeMs, selectedTimezone) }
     val moodPoints = remember(dayBounds.first, dayBounds.second, showMood) {
@@ -400,6 +402,7 @@ fun MainScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     ResonanceSwitch("Detrended pane", showDetr, Modifier.weight(1f)) { onHaptic(); showDetr = it }
+                    ResonanceSwitch("Detrended MC", showDetrMc, Modifier.weight(1f)) { onHaptic(); showDetrMc = it }
                     ResonanceSwitch("MACD pane", showMacd, Modifier.weight(1f)) { onHaptic(); showMacd = it }
                 }
                 ResonanceSwitch("Moon mood card (temperature of the day)", showMood, Modifier.fillMaxWidth()) { onHaptic(); showMood = it }
@@ -564,6 +567,29 @@ fun MainScreen(
                             inspectedTimeMs = currentBar.timeMs,
                             view = chartView,
                             zoom = zoom
+                        )
+                    }
+                }
+
+                if (showDetrMc) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    val mcNow = detrMc.getOrNull(curIdx)
+                    PaneHeader(
+                        title = "DETRENDED MIDHEAVEN–NATAL  (index − 1h average)",
+                        value = mcNow?.let { (if (it > 0) "+" else "") + "%.3f".format(it) },
+                        valueColor = if ((mcNow ?: 0.0) > 0) Emerald400 else if ((mcNow ?: 0.0) < 0) Rose400 else Slate400
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Box(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))) {
+                        DetrendedPane(
+                            series = series,
+                            detr = detrMc,
+                            inspectedTimeMs = currentBar?.timeMs ?: inspectedTimeMs,
+                            view = chartView,
+                            zoom = zoom,
+                            td = td,
+                            skyTint = skyTintOn,
+                            minScale = 0.02
                         )
                     }
                 }

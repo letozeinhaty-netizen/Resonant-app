@@ -586,6 +586,17 @@ object AstroEngine {
         }
     }
 
+    /** v6.4: the same detrending for the Midheaven-vs-natal index (mcScore, -1..+1): value minus its trailing 1-hour average. */
+    fun detrendedMc(series: List<SentimentBar>, window: Int = DETREND_BARS): DoubleArray {
+        val n = series.size
+        return DoubleArray(n) { i ->
+            val from = max(0, i - window + 1)
+            var sum = 0.0
+            for (k in from..i) sum += series[k].mcScore
+            series[i].mcScore - sum / (i - from + 1)
+        }
+    }
+
     // v4.3: MACD settings in 5-minute bars (classic 12 / 26 / 9 = 1h / 2h10m / 45m)
     private const val MACD_FAST = 12
     private const val MACD_SLOW = 26
