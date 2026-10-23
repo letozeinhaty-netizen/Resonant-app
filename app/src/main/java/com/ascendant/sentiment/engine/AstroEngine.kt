@@ -1034,6 +1034,41 @@ object AstroEngine {
         )
     }
 
+    /**
+     * v6.3: the Ascendant line and the Midheaven line for the whole week, 6-hour bars. The Ascendant turns through the
+     * whole zodiac in a day, so every bar is the average of many readings (every 15 minutes by default).
+     *  - asc = Smarket of the Ascendant against the transiting planets (the original Ascendant index),
+     *  - mc  = Smarket of the Midheaven against the natal planets (the original Midheaven index).
+     */
+    fun calculateAxisWeek(
+        startMs: Long,
+        lat: Double,
+        lon: Double,
+        bars: Int = 28,
+        barMs: Long = 6 * 3_600_000L,
+        stepMs: Long = 900_000L,
+        orbLimit: Double = 3.0,
+        useSd: Boolean = true,
+        usePm: Boolean = true,
+        taintAllMm: Boolean = true
+    ): AxisWeek {
+        val per = max(1, (barMs / stepMs).toInt())
+        val out = ArrayList<AxisBar>(bars)
+        for (i in 0 until bars) {
+            val b0 = startMs + i * barMs
+            var a = 0.0
+            var m = 0.0
+            for (k in 0 until per) {
+                val t = b0 + k * stepMs + stepMs / 2
+                val longs = calculatePlanetaryPositions(t)
+                a += calculateScore(calculateAspects(calculateAscendant(t, lat, lon), longs, orbLimit, useSd, usePm, taintAllMm))
+                m += calculateScore(calculateMidheavenAspects(calculateMidheaven(t, lon), longs, orbLimit, useSd, usePm, taintAllMm))
+            }
+            out.add(AxisBar(b0, a / per, m / per))
+        }
+        return AxisWeek(out, barMs)
+    }
+
     /** Start and end (exclusive) of the week shown by the sky card: 2 days before to 5 days after the local day of ms. */
     fun weekBoundsMs(ms: Long, timeZoneId: String, daysBack: Int = 2, daysForward: Int = 5): Pair<Long, Long> {
         val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone(timeZoneId))

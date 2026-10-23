@@ -105,6 +105,7 @@ fun MainScreen(
     var showVoc by remember { mutableStateOf(true) }      // v6.1: void-of-course Moon row
     var showStations by remember { mutableStateOf(true) } // v6.1: station row
     var moonInNatal by remember { mutableStateOf(true) }  // v6.2: transiting Moon in the sky card's natal line
+    var showAxis by remember { mutableStateOf(true) }     // v6.3: Ascendant / Midheaven week card
     var showSky by remember { mutableStateOf(true) }      // v6.1: sky field week card
     var skyTintOn by remember { mutableStateOf(true) }    // v6.1: sky tint on the detrended pane
 
@@ -155,6 +156,12 @@ fun MainScreen(
     val td = remember(series, taintAllMm) { AstroEngine.turningData(series, 3.0, taintAllMm) }
     // v6.1: sky field week card, 6-hour bars, recomputed when the local week changes or the switches change
     val weekBounds = remember(inspectedTimeMs / 86_400_000L, selectedTimezone) { AstroEngine.weekBoundsMs(inspectedTimeMs, selectedTimezone) }
+    val axisWeek = remember(weekBounds.first, showAxis, activeLocation, useSd, usePm, taintAllMm) {
+        if (showAxis) AstroEngine.calculateAxisWeek(
+            startMs = weekBounds.first, lat = activeLocation.lat, lon = activeLocation.lon,
+            useSd = useSd, usePm = usePm, taintAllMm = taintAllMm
+        ) else null
+    }
     val skyWeek = remember(weekBounds.first, showSky, moonInNatal, useSd, usePm, taintAllMm, orbFalloff, pairBoost) {
         if (showSky) AstroEngine.calculateSkyWeek(
             startMs = weekBounds.first, useSd = useSd, usePm = usePm, taintAllMm = taintAllMm,
@@ -404,6 +411,7 @@ fun MainScreen(
                     ResonanceSwitch("Sky field week card", showSky, Modifier.weight(1f)) { onHaptic(); showSky = it }
                     ResonanceSwitch("Sky tint (detrended)", skyTintOn, Modifier.weight(1f)) { onHaptic(); skyTintOn = it }
                 }
+                ResonanceSwitch("Ascendant / Midheaven week card", showAxis, Modifier.fillMaxWidth()) { onHaptic(); showAxis = it }
                 ResonanceSwitch("Moon in sky card natal line", moonInNatal, Modifier.fillMaxWidth()) { onHaptic(); moonInNatal = it }
             }
         }
@@ -692,6 +700,21 @@ fun MainScreen(
                     }
                 }
             }
+        }
+
+        // v6.3: Ascendant and Midheaven lines for the week (just above the Moon mood card)
+        if (showAxis && axisWeek != null) {
+            AxisFieldCard(
+                week = axisWeek,
+                inspectedTimeMs = inspectedTimeMs,
+                nowMs = nowMs,
+                timeZoneId = selectedTimezone,
+                onInspectTime = { t ->
+                    isLive = false
+                    if (series.isNotEmpty() && (t < series.first().timeMs || t > series.last().timeMs)) centerTimeMs = t
+                    inspectedTimeMs = t
+                }
+            )
         }
 
         // v5.0: Moon mood, temperature of the day (below the chart card with its MACD pane and steppers)

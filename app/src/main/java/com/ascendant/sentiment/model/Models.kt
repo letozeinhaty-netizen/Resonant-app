@@ -216,3 +216,12 @@ class SkyWeek(
     val vocSpans: List<VocSpan>,
     val barMs: Long
 )
+
+/** v6.3: one 6-hour bar of the Ascendant / Midheaven week (each value is the average of the readings inside the bar). */
+class AxisBar(
+    val startMs: Long,
+    val asc: Double,     // Ascendant to transiting planets, Smarket index (-1..+1)
+    val mc: Double       // Midheaven to natal planets, Smarket index (-1..+1)
+)
+
+class AxisWeek(val bars: List<AxisBar>, val barMs: Long)
