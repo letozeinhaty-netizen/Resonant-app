@@ -586,14 +586,28 @@ object AstroEngine {
         }
     }
 
-    /** v6.4: the same detrending for the Midheaven-vs-natal index (mcScore, -1..+1): value minus its trailing 1-hour average. */
-    fun detrendedMc(series: List<SentimentBar>, window: Int = DETREND_BARS): DoubleArray {
+    /** v6.5: sum of the aspect hits on one axis: Sum(Sp x Wp x Cj), times the orb factor when orb falloff is on. No division. */
+    fun aspectSum(list: List<AspectInfo>, orbFalloff: Boolean, orbLimit: Double = 3.0): Double {
+        var sum = 0.0
+        for (a in list) {
+            val of = if (orbFalloff) max(0.0, 1.0 - a.orbDiff / orbLimit) else 1.0
+            sum += a.polarity * a.dynWeight * a.coeff * of
+        }
+        return sum
+    }
+
+    /**
+     * v6.5: detrended running total for the Ascendant (vs transiting planets) or the Midheaven (vs natal planets):
+     * the sum of that axis' aspect hits minus its trailing 1-hour average.
+     */
+    fun detrendedAxisSum(series: List<SentimentBar>, midheaven: Boolean, orbFalloff: Boolean, window: Int = DETREND_BARS): DoubleArray {
         val n = series.size
+        val raw = DoubleArray(n) { aspectSum(if (midheaven) series[it].mcAspects else series[it].aspects, orbFalloff) }
         return DoubleArray(n) { i ->
             val from = max(0, i - window + 1)
             var sum = 0.0
-            for (k in from..i) sum += series[k].mcScore
-            series[i].mcScore - sum / (i - from + 1)
+            for (k in from..i) sum += raw[k]
+            raw[i] - sum / (i - from + 1)
         }
     }
 
