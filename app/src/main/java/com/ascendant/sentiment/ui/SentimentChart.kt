@@ -458,13 +458,15 @@ fun DetrendedPane(
         drawRect(color = BgDark, size = size)
         val yZero = getY(0.0)
 
-        // v6.1: sky field tint behind the bars (green = sky field bullish, red = bearish)
-        if (skyTint && td != null && td.sky.size == numBars) {
+        // v6.6: background tint follows the transit-to-transit field: green while it is rising (higher than the
+        // previous bar), red while it is falling
+        if (skyTint && td != null && td.sky.size == numBars && numBars > 1) {
             val bwT = plotWidth / count
             for (i in start until start + count) {
-                val t = AstroEngine.skyTint(td.sky[i])
+                val d = if (i == 0) td.sky[1] - td.sky[0] else td.sky[i] - td.sky[i - 1]
+                if (d == 0.0) continue
                 drawRect(
-                    color = (if (t >= 0) Emerald500 else Rose500).copy(alpha = (0.25 * abs(t)).toFloat()),
+                    color = (if (d > 0) Emerald500 else Rose500).copy(alpha = 0.2f),
                     topLeft = Offset(leftMargin + (i - start) * bwT, topMargin),
                     size = Size(maxOf(bwT, 1f), plotHeight)
                 )
