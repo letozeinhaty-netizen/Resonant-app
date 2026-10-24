@@ -63,6 +63,26 @@ internal fun niceCeil(v: Double): Double {
 internal fun fmtScale(v: Double): String = if (v < 0.1) "%.3f".format(v).trimEnd('0').trimEnd('.') else if (v >= 10.0) "%.0f".format(v) else if (v >= 1.0 && v == floor(v)) "%.0f".format(v) else "%.2f".format(v).trimEnd('0').trimEnd('.')
 
 /**
+ * v6.7: works out the visible window shared by the chart and the panes under it.
+ * view[0] = first visible bar, view[1] = visible bar count, view[2] = zoom the view was last centred for.
+ * The main chart calls this, and so does the screen itself, so the panes keep their zoom and scrolling
+ * when the main chart is switched off.
+ */
+internal fun updateChartView(view: IntArray, numBars: Int, zoom: Float, selIdx: Int) {
+    if (numBars <= 0) return
+    val count = (numBars / zoom).roundToInt().coerceIn(minOf(12, numBars), numBars)
+    val zoomKey = (zoom * 1000f).roundToInt()
+    var start = view[0]
+    if (zoomKey != view[2]) start = selIdx - count / 2            // zoom changed: centre on the cursor
+    else if (selIdx < start) start = selIdx                       // cursor left the view: scroll just enough
+    else if (selIdx >= start + count) start = selIdx - count + 1
+    start = start.coerceIn(0, numBars - count)
+    view[0] = start
+    view[1] = count
+    view[2] = zoomKey
+}
+
+/**
  * v4.0: 5-minute transit vs natal RESONANCE bars. Green bar up = weighted bullish resonance,
  * red bar down = weighted bearish resonance (magenta part = hard Pluto), white tick = net.
  * v4.1: the yellow line is the slow stochastic of the net (0 to 100 mapped onto the full chart height,
@@ -92,19 +112,9 @@ fun SentimentChart(
         niceCeil(max(1.0, series.maxOf { max(it.resBull, it.resBear) } * 1.05))
     }
     val firstT = series.first().timeMs
-    val count = (numBars / zoom).roundToInt().coerceIn(minOf(12, numBars), numBars)
     val selIdx = ((inspectedTimeMs - firstT) / 300_000.0).toInt().coerceIn(0, numBars - 1)
-
-    // view[0] = first visible bar, view[1] = visible bar count, view[2] = zoom the view was last centred for
-    val zoomKey = (zoom * 1000f).roundToInt()
-    var start = view[0]
-    if (zoomKey != view[2]) start = selIdx - count / 2            // zoom changed: centre on the cursor
-    else if (selIdx < start) start = selIdx                       // cursor left the view: scroll just enough
-    else if (selIdx >= start + count) start = selIdx - count + 1
-    start = start.coerceIn(0, numBars - count)
-    view[0] = start
-    view[1] = count
-    view[2] = zoomKey
+    updateChartView(view, numBars, zoom, selIdx)
+    val count = view[1]
 
     val currentOnInspect = rememberUpdatedState(onInspectTime)
     val currentOnZoom = rememberUpdatedState(onZoomBy)

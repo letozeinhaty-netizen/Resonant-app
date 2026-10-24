@@ -92,21 +92,23 @@ fun MainScreen(
     var useSd by remember { mutableStateOf(true) }   // v3.0: sign dignity switch
     var usePm by remember { mutableStateOf(true) }   // v3.0: planet-to-planet modifier switch
     var showMc by remember { mutableStateOf(true) }          // v3.2: Midheaven birth chart overlay
-    var zoom by remember { mutableStateOf(1f) }              // v3.3: chart zoom (1 = all bars)
+    var zoom by remember { mutableStateOf(2f) }              // v3.3: chart zoom (1 = all bars); v6.7: default 2×
     var taintAllMm by remember { mutableStateOf(true) } // v3.1: Mercury/Mars taint flips ALL Ascendant aspects
     var orbFalloff by remember { mutableStateOf(true) }   // v4.0: resonance orb falloff (1 - orb/3)
     var pairBoost by remember { mutableStateOf(true) }    // v4.0: x1.5 when a planet aspects its own natal position
     var trigger by remember { mutableStateOf(true) }      // v4.0: Ascendant / Midheaven trigger boost
     var showFlags by remember { mutableStateOf(true) }    // v4.3: zero-cross flags on the main chart
-    var showShare by remember { mutableStateOf(true) }    // v4.3: bull share strip
+    var showShare by remember { mutableStateOf(false) }    // v4.3: bull share strip
     var showDetrAsc by remember { mutableStateOf(true) }  // v6.5: detrended Ascendant aspect total
-    var showDetrMc by remember { mutableStateOf(true) }   // v6.4: detrended Midheaven-natal pane
-    var showDetr by remember { mutableStateOf(true) }     // v4.2: detrended net pane
-    var showMacd by remember { mutableStateOf(true) }     // v4.3: MACD pane
+    var showDetrMc by remember { mutableStateOf(false) }   // v6.4: detrended Midheaven-natal pane
+    var showDetr by remember { mutableStateOf(false) }     // v4.2: detrended net pane
+    var showMacd by remember { mutableStateOf(false) }     // v4.3: MACD pane
     var showMood by remember { mutableStateOf(true) }     // v5.0: Moon mood card
-    var showVoc by remember { mutableStateOf(true) }      // v6.1: void-of-course Moon row
-    var showStations by remember { mutableStateOf(true) } // v6.1: station row
+    var showVoc by remember { mutableStateOf(false) }      // v6.1: void-of-course Moon row
+    var showStations by remember { mutableStateOf(false) } // v6.1: station row
     var moonInNatal by remember { mutableStateOf(true) }  // v6.2: transiting Moon in the sky card's natal line
+    var showResonance by remember { mutableStateOf(false) } // v6.7: main resonance chart (off by default)
+    var showCards by remember { mutableStateOf(false) }     // v6.7: breakdown, active Midheaven / Ascendant and exact hits cards
     var showSky by remember { mutableStateOf(true) }      // v6.1: sky field week card
     var skyTintOn by remember { mutableStateOf(true) }    // v6.1: sky tint on the detrended pane
 
@@ -401,6 +403,8 @@ fun MainScreen(
                     ResonanceSwitch("Detrended MC", showDetrMc, Modifier.weight(1f)) { onHaptic(); showDetrMc = it }
                     ResonanceSwitch("MACD pane", showMacd, Modifier.weight(1f)) { onHaptic(); showMacd = it }
                 }
+                ResonanceSwitch("Main resonance chart", showResonance, Modifier.fillMaxWidth()) { onHaptic(); showResonance = it }
+                ResonanceSwitch("Detail cards (breakdown, active aspects, exact hits)", showCards, Modifier.fillMaxWidth()) { onHaptic(); showCards = it }
                 ResonanceSwitch("Moon mood card (temperature of the day)", showMood, Modifier.fillMaxWidth()) { onHaptic(); showMood = it }
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     ResonanceSwitch("VOC Moon row", showVoc, Modifier.weight(1f)) { onHaptic(); showVoc = it }
@@ -436,7 +440,7 @@ fun MainScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "TRANSIT–NATAL RESONANCE PER 5-MIN BAR",
+                        text = if (showResonance) "TRANSIT–NATAL RESONANCE PER 5-MIN BAR" else "PANES · 5-MIN BARS",
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
                         color = Slate100,
@@ -474,13 +478,13 @@ fun MainScreen(
                         Text("+", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Slate100)
                     }
                 }
-                Text(
+                if (showResonance) Text(
                     text = "Green up: bullish  |  red down: bearish  |  white tick: net  |  sky line: base  |  violet: Asc/MC pulse  |  yellow: stochastic  |  ▲▼: net crosses zero  |  magenta: hard Pluto  |  auto scale  |  pinch or +/- to zoom",
                     fontSize = 10.sp,
                     color = Slate400,
                     modifier = Modifier.padding(top = 2.dp)
                 )
-                if (currentBar != null) {
+                if (showResonance && currentBar != null) {
                     val stochNow = stoch.getOrNull(((currentBar.timeMs - series.first().timeMs) / 300_000L).toInt())
                     Row(
                         modifier = Modifier.padding(top = 2.dp),
@@ -510,6 +514,13 @@ fun MainScreen(
                 }
                 Spacer(modifier = Modifier.height(8.dp))
 
+                // v6.7: the window shared by every pane is worked out here, so zoom works with the main chart off
+                if (series.isNotEmpty()) {
+                    val viewMs = currentBar?.timeMs ?: inspectedTimeMs
+                    updateChartView(chartView, series.size, zoom, ((viewMs - series.first().timeMs) / 300_000L).toInt().coerceIn(0, series.size - 1))
+                }
+
+                if (showResonance) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -540,6 +551,7 @@ fun MainScreen(
                             .fillMaxWidth()
                             .heightIn(min = 260.dp)
                     )
+                }
                 }
 
                 // v4.3: sub panes lined up under the chart (each one has a switch)
@@ -775,6 +787,7 @@ fun MainScreen(
             )
         }
 
+        if (showCards) {
         // v4.2: per-bar resonance breakdown (quiet panel directly below the chart)
         ResonanceBreakdownCard(currentBar = currentBar)
 
@@ -797,6 +810,7 @@ fun MainScreen(
                 centerTimeMs = hitMs
             }
         )
+        }
 
         Spacer(modifier = Modifier.height(16.dp))
 
